@@ -1,56 +1,32 @@
 # Poly VPN
 
-Post-quantum encrypted, scatter-routed VPN built on eStream v0.8.1.
+**GitHub**: [polylabs-dev/polyvpn](https://github.com/polylabs-dev/polyvpn)
+**Platform**: eStream v0.8.3
+**Depends on**: PolyKit v0.3.0, eStream graph/DAG constructs
 
-## Overview
+## Purpose
 
-Poly VPN provides device-level PQ-encrypted privacy for all traffic -- not a single tunnel but scatter-routed across multiple exit nodes simultaneously. Traffic mimicry (trade secret) makes VPN traffic look like normal app usage.
+Post-quantum encrypted, scatter-routed VPN with traffic mimicry. Traffic is split across multiple exit nodes simultaneously — no single exit sees the complete picture. All crypto in Rust/WASM; TypeScript is DOM-only.
 
-## Architecture
+## Zero-Linkage Privacy
 
-```
-Device Kernel/Tun Interface
-    |
-    +-- SPARK Auth (ML-DSA-87 biometric)
-    |
-    +-- PQ Encrypt (ML-KEM-1024 per exit node)
-    |
-    v
-Scatter Router (VRF-directed multi-path)
-    |
-    +-- Exit Node A (US) -- looks like Netflix
-    +-- Exit Node B (EU) -- looks like YouTube
-    +-- Exit Node C (APAC) -- looks like iCloud
-    |
-    v
-Internet (traffic appears from multiple unrelated sources)
-```
+HKDF context: `poly-vpn-v1`. User identities are completely isolated from all other Poly products. StreamSight telemetry stays within `polylabs.vpn.*` lex namespace. Metering under `polylabs.vpn.metering`. Billing via blinded tokens.
 
-## Key Differentiators
+## Structure
 
-| Feature | Traditional VPN | Poly VPN |
-|---------|----------------|----------|
-| Encryption | Classical (WireGuard/IKEv2) | **PQ** (ML-KEM-1024) |
-| Tunnel | Single to exit node | **Multi-exit scatter** |
-| Traffic analysis | VPN protocol detectable | **Traffic mimicry** |
-| Exit visibility | Single exit sees all traffic | **No exit sees complete picture** |
-| Kill switch | Yes | Yes |
-| Split tunneling | Sometimes | Yes |
+- `circuits/fl/` — FastLang circuit definitions (encrypt, scatter, mimicry, kill switch, DNS, metering)
+- `circuits/fl/graphs/` — Graph/DAG constructs (vpn_exit_mesh, tunnel_route)
+- `crates/` — Rust crates (poly-vpn-core, poly-exit-node, poly-vpn-platform)
+- `apps/desktop/` — Tauri desktop (Mac, Win, Linux)
+- `apps/mobile/` — React Native + Rust FFI (iOS, Android)
+- `packages/` — TypeScript SDKs and console widgets
+- `docs/` — Architecture and design documents
 
-## Platforms
+## Key Graphs
 
-- macOS, Windows, Linux (Tauri desktop)
-- iOS, Android (React Native + Rust FFI)
-- Router firmware (enterprise)
+- `graph vpn_exit_mesh` — exit node topology with `ai_feed exit_selection`, overlays: latency_ns, bandwidth_mbps, load_pct, jurisdiction, blacklist_status
+- `dag tunnel_route` — multi-hop scatter routing DAG, `enforce acyclic`, overlays: hop_latency, encryption_overhead
 
-## No REST API
+## Commit Convention
 
-All management uses the eStream Wire Protocol. No REST/HTTP endpoints.
-
-## Platform
-
-- eStream v0.8.1
-- ESCIR SmartCircuits for routing/metering
-- ML-KEM-1024, ML-DSA-87, SHA3-256
-- 8-Dimension metering
-- L2 multi-token payments
+Commit to the GitHub issue or epic the work was done under.
