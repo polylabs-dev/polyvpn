@@ -2,7 +2,7 @@
 
 **Version**: 3.0
 **Date**: February 2026
-**Platform**: eStream v0.8.3
+**Platform**: eStream v0.9.1
 **Upstream**: PolyKit v0.3.0, eStream graph/DAG constructs
 **Build Pipeline**: FastLang (.fl) → ESCIR → Rust/WASM codegen → .escd
 
@@ -21,7 +21,7 @@ Poly VPN is a post-quantum encrypted, scatter-routed VPN. Traffic is not funnele
 | Exit selection | VRF random | `ai_feed exit_selection` (optimal multi-exit route) |
 | Circuit format | ESCIR YAML (`circuit.escir.yaml`) | FastLang `.fl` with PolyKit profiles |
 | RBAC | Per-circuit annotations | eStream `rbac.fl` composed via PolyKit |
-| Platform | eStream v0.8.1 | eStream v0.8.3 |
+| Platform | eStream v0.8.1 | eStream v0.9.1 |
 
 ---
 
@@ -558,3 +558,105 @@ polyvpn/
 - Enterprise admin via lex bridge (opt-in, k-of-n witness gated)
 - Router firmware (OpenWrt package)
 - Compliance features, SLA
+
+---
+
+## Stratum & Cortex Integration
+
+All graph and DAG constructs use the full Stratum+Cortex pattern from eStream v0.9.1. This provides typed storage with AI-governed data lifecycle, privacy enforcement, and anomaly detection.
+
+### Stratum: Typed Graph/DAG Storage
+
+| Construct | File | Storage | Signing |
+|-----------|------|---------|---------|
+| `vpn_exit_mesh` | `graphs/polyvpn_exit_graph.fl` | `store graph` → CSR (BRAM/DDR/NVMe tiering) | ML-DSA-87 on all mutations |
+| `tunnel_route` | `graphs/polyvpn_route_dag.fl` | `store dag` → Merkle-CSR with `enforce acyclic` | ML-DSA-87 + `attest povc { witness threshold(2,3) }` |
+
+Both constructs maintain typed overlays with `delta_curate` for real-time state without mutating base nodes:
+
+**Exit Mesh Overlays**: `latency_ns`, `bandwidth_mbps`, `load_pct`, `jurisdiction`, `blacklist_status`
+
+**Route DAG Overlays**: `hop_latency`, `encryption_overhead`, `hop_status`
+
+### Cortex: AI Governance Layer
+
+Each `data` declaration carries a `cortex` block that governs how Cortex (the AI governance layer) handles sensitive fields:
+
+```fastlang
+data ExitNode : app v1 {
+    exit_id: string, endpoint_address: string, private_key_hash: string,
+    jurisdiction: string, operator_id: string, ...
+}
+    store graph
+    govern lex esn/global/org/polylabs/vpn
+    cortex {
+        redact [endpoint_address, private_key_hash]
+        obfuscate [jurisdiction, operator_id]
+        infer on_read
+        on_anomaly alert "vpn-ops"
+    }
+```
+
+| Directive | Effect |
+|-----------|--------|
+| `redact` | Fields are stripped from Cortex inference inputs and AI feed contexts |
+| `obfuscate` | Fields are hashed/tokenized before Cortex processes them |
+| `infer on_read` / `on_write` | When Cortex inference triggers (read-path for exits, write-path for routes) |
+| `on_anomaly alert` | Anomaly detection alerts routed to the specified ops channel |
+
+### AI Feeds
+
+| Feed | Graph | Purpose |
+|------|-------|---------|
+| `exit_selection` | `vpn_exit_mesh` | Predicts optimal multi-exit scatter routes based on latency, load, and bandwidth overlays. Confidence threshold: 0.85. |
+
+The `exit_selection` feed provides `predict`, `suggest`, and `confidence` directives:
+- **predict**: `[latency_ns, load_pct, bandwidth_mbps]` — real-time overlay forecasting
+- **suggest**: `[optimal_exit_set, rebalance_trigger]` — actionable routing recommendations
+- **confidence**: 0.85 — minimum confidence for AI suggestions to override heuristic fallback
+
+### Series & Attestation
+
+Both constructs emit append-only series with full integrity chain:
+
+```fastlang
+series exit_series: vpn_exit_mesh
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+series route_series: tunnel_route
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+```
+
+- **merkle_chain**: Each mutation is Merkle-chained for tamper evidence
+- **lattice_imprint**: Series state imprinted to the eStream lattice for global consistency
+- **witness_attest**: Independent witnesses attest to series integrity
+
+### Route DAG: Acyclicity & PoVC
+
+The `tunnel_route` DAG enforces structural constraints beyond what the graph provides:
+
+- `enforce acyclic` — prevents routing loops at the DAG level
+- `sign ml_dsa_87` — every node and edge mutation is PQ-signed
+- `storage merkle_csr` — Merkle-backed CSR for inclusion proofs
+- `attest povc { witness threshold(2,3) }` — 2-of-3 witness quorum for route attestation
+
+The `prove_route_integrity` circuit computes a Merkle root over all hops in a route and verifies inclusion proofs, feeding anomalies back to Cortex if verification fails.
+
+### Privacy Flow
+
+```
+Exit registration → Cortex redacts endpoint_address, private_key_hash
+                  → Cortex obfuscates jurisdiction, operator_id
+                  → Overlays store real-time metrics (no PII)
+                  → ai_feed sees only obfuscated/overlay data
+                  → on_anomaly alerts vpn-ops (no raw fields)
+
+Route building    → Cortex redacts hop_key on write
+                  → Cortex obfuscates exit_id
+                  → PoVC witnesses attest route integrity
+                  → Series chain provides tamper evidence
+```

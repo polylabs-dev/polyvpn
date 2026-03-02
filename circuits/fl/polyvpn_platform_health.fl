@@ -1,0 +1,289 @@
+/// Poly VPN Platform Health — Blind relay pattern health monitoring
+///
+/// Aggregates tunnel-operation metrics through blinded, cohort-enforced telemetry.
+/// Stratum: kv store + lex governance under esn/global/org/polylabs/vpn.
+/// Cortex: obfuscation, write-time inference, anomaly alerting to vpn-team.
+///
+/// Zero-linkage: HKDF("poly-vpn-telemetry-v1") isolates all identity.
+/// No tunnel endpoints, traffic content, or routing paths ever reach StreamSight.
+/// Traffic mimicry must maintain >=95% coverage at all times.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_blind_telemetry from "../../polykit/circuits/fl/polykit_blind_telemetry.fl"
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Data Declarations with Stratum + Cortex ─────────────────────────
+
+data PlatformMetrics : app v1 {
+    blinded_user_id: bytes(32),
+    cohort_ok: bool,
+    cohort_size: u32,
+    platform_queries: u64,
+    active_tunnels: u64,
+    bandwidth_bytes_total: u64,
+    tunnel_latency_avg_ms: u64,
+    mimicry_active: bool,
+    mimicry_coverage: f64,
+    jurisdiction_diversity: u64,
+    all_healthy: bool,
+    content_visible: bool,
+    baseline_deviation: f64,
+    anomaly_score: f64,
+    collected_at: u64,
+}
+    store kv
+    govern lex esn/global/org/polylabs/vpn
+    cortex {
+        obfuscate [blinded_user_id, anomaly_score, tunnel_latency_avg_ms]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
+
+type HealthStatus = enum {
+    Healthy,
+    Degraded,
+    Critical,
+}
+
+// ── Streams ─────────────────────────────────────────────────────────
+
+stream vpn_health_events: event<PlatformMetrics>
+    retention 365d
+    consumers [streamsight, audit_trail]
+    classify blinded_user_id: METADATA, cohort_size: METADATA
+
+stream vpn_anomaly_events: event<PlatformMetrics>
+    retention forever
+    consumers [streamsight, governance, alerting]
+
+// ── Series ──────────────────────────────────────────────────────────
+
+series vpn_health_series: vpn_health_events
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// ── Main Platform Health Circuit ────────────────────────────────────
+
+circuit vpn_platform_health(
+    spark_id: bytes(32),
+    active_user_count: u32,
+    platform_queries: u64,
+    active_tunnels: u64,
+    bandwidth_bytes_total: u64,
+    tunnel_latency_avg_ms: u64,
+    mimicry_active: bool,
+    mimicry_coverage: f64,
+    jurisdiction_diversity: u64,
+) -> PlatformMetrics
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn {
+        governance hierarchical
+        audit_trail true
+        sub_lex tunnel fan_in
+    }
+    precision C
+    streamsight true
+    povc true
+    observe metrics: [platform_queries, active_tunnels, bandwidth_bytes_total, tunnel_latency_avg_ms, mimicry_active, jurisdiction_diversity]
+    invariant "no_content_at_platform" { content_visible == false }
+    invariant "traffic_mimicry_active" { mimicry_coverage >= 0.95 }
+    property safety "session_isolation" { no_cross_session_data }
+    property liveness "eventually_healthy" { eventually(all_healthy == true) }
+    monitor "tunnel_latency" { tunnel_latency_avg_ms < 200 }
+    esz_emit "verify/vpn_health.esz"
+    li_feed full_escir true, optimized_ir true, optimization_metadata true
+    fuzz_target
+    test golden "healthy_platform" {
+        let spark = bytes(32, 0xAA)
+        let result = vpn_platform_health(spark, 500, 20000, 480, 107374182400, 85, true, 0.98, 12)
+        assert result.all_healthy == true
+        assert result.content_visible == false
+        assert result.cohort_ok == true
+        assert result.mimicry_coverage >= 0.95
+    }
+    test golden "high_latency_degrades" {
+        let spark = bytes(32, 0xCC)
+        let result = vpn_platform_health(spark, 300, 15000, 280, 53687091200, 250, true, 0.97, 8)
+        assert result.all_healthy == false
+        assert result.content_visible == false
+    }
+    test golden "low_mimicry_fails_invariant" {
+        let spark = bytes(32, 0xDD)
+        let result = vpn_platform_health(spark, 200, 10000, 180, 21474836480, 90, true, 0.80, 6)
+        assert result.all_healthy == false
+    }
+    test golden "small_cohort_still_collects" {
+        let spark = bytes(32, 0xBB)
+        let result = vpn_platform_health(spark, 10, 100, 8, 1073741824, 50, true, 0.99, 3)
+        assert result.cohort_ok == false
+        assert result.content_visible == false
+    }
+{
+    let ts = now_ns() / 1000000
+
+    let blinded = polykit_blind_telemetry::blind_user_id(spark_id, "poly-vpn-telemetry-v1")
+
+    let (cohort_status, cohort_ok) = polykit_blind_telemetry::enforce_cohort(active_user_count, 50)
+
+    let latency_baseline = streamsight_baseline("tunnel_latency_avg_ms", 3600000)
+    let current_deviation = if latency_baseline > 0 {
+        abs(tunnel_latency_avg_ms - latency_baseline) / latency_baseline
+    } else {
+        0.0
+    }
+
+    let anomaly = streamsight_anomaly("vpn_health", PlatformMetrics {
+        platform_queries: platform_queries,
+        active_tunnels: active_tunnels,
+        bandwidth_bytes_total: bandwidth_bytes_total,
+        tunnel_latency_avg_ms: tunnel_latency_avg_ms,
+        mimicry_active: mimicry_active,
+        jurisdiction_diversity: jurisdiction_diversity,
+    })
+
+    let latency_healthy = tunnel_latency_avg_ms < 200
+    let mimicry_healthy = mimicry_active && mimicry_coverage >= 0.95
+    let diversity_healthy = jurisdiction_diversity >= 3
+    let bandwidth_healthy = bandwidth_bytes_total > 0
+    let all_ok = latency_healthy && mimicry_healthy && diversity_healthy && bandwidth_healthy
+
+    if anomaly.is_anomalous {
+        let alert_metrics = PlatformMetrics {
+            blinded_user_id: blinded,
+            cohort_ok: cohort_ok,
+            cohort_size: active_user_count,
+            platform_queries: platform_queries,
+            active_tunnels: active_tunnels,
+            bandwidth_bytes_total: bandwidth_bytes_total,
+            tunnel_latency_avg_ms: tunnel_latency_avg_ms,
+            mimicry_active: mimicry_active,
+            mimicry_coverage: mimicry_coverage,
+            jurisdiction_diversity: jurisdiction_diversity,
+            all_healthy: false,
+            content_visible: false,
+            baseline_deviation: current_deviation,
+            anomaly_score: anomaly.score,
+            collected_at: ts,
+        }
+        emit(vpn_anomaly_events, alert_metrics)
+    }
+
+    let metrics = PlatformMetrics {
+        blinded_user_id: blinded,
+        cohort_ok: cohort_ok,
+        cohort_size: active_user_count,
+        platform_queries: platform_queries,
+        active_tunnels: active_tunnels,
+        bandwidth_bytes_total: bandwidth_bytes_total,
+        tunnel_latency_avg_ms: tunnel_latency_avg_ms,
+        mimicry_active: mimicry_active,
+        mimicry_coverage: mimicry_coverage,
+        jurisdiction_diversity: jurisdiction_diversity,
+        all_healthy: all_ok,
+        content_visible: false,
+        baseline_deviation: current_deviation,
+        anomaly_score: anomaly.score,
+        collected_at: ts,
+    }
+
+    if cohort_ok {
+        emit(vpn_health_events, metrics)
+        eslite_insert("vpn_health", sha3_256(serialize(metrics)), metrics)
+    }
+
+    metrics
+}
+
+// ── Anomaly Check Circuit with Cortex AI Feed ───────────────────────
+
+circuit vpn_anomaly_check(
+    recent_metrics: list<PlatformMetrics>,
+    window_ms: u64,
+) -> (HealthStatus, f64, string)
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn {
+        governance hierarchical
+        audit_trail true
+    }
+    precision C
+    streamsight true
+    observe metrics: [anomaly_checks, anomaly_detections]
+    monitor "anomaly_rate" { anomaly_detections < 50/hr }
+    cortex {
+        ai_feed {
+            model "vpn_health_classifier"
+            input [recent_metrics, window_ms]
+            output [health_status, confidence, explanation]
+            retrain on_drift
+            drift_threshold 0.10
+        }
+    }
+    test golden "no_anomaly_healthy" {
+        let m = [PlatformMetrics {
+            blinded_user_id: bytes(32, 0x00),
+            cohort_ok: true,
+            cohort_size: 500,
+            platform_queries: 20000,
+            active_tunnels: 480,
+            bandwidth_bytes_total: 107374182400,
+            tunnel_latency_avg_ms: 85,
+            mimicry_active: true,
+            mimicry_coverage: 0.98,
+            jurisdiction_diversity: 12,
+            all_healthy: true,
+            content_visible: false,
+            baseline_deviation: 0.03,
+            anomaly_score: 0.04,
+            collected_at: 1000000,
+        }]
+        let (status, conf, _) = vpn_anomaly_check(m, 3600000)
+        assert status == HealthStatus::Healthy
+        assert conf > 0.8
+    }
+{
+    let ts = now_ns() / 1000000
+    let window_start = ts - window_ms
+
+    let windowed = filter(recent_metrics, |m| m.collected_at >= window_start)
+
+    if len(windowed) == 0 {
+        return (HealthStatus::Critical, 1.0, "no metrics in window")
+    }
+
+    let avg_deviation = sum(map(windowed, |m| m.baseline_deviation)) / len(windowed)
+    let max_anomaly = max(map(windowed, |m| m.anomaly_score))
+    let unhealthy_count = count(windowed, |m| !m.all_healthy)
+    let unhealthy_ratio = unhealthy_count / len(windowed)
+
+    let mimicry_failures = count(windowed, |m| m.mimicry_coverage < 0.95)
+    let avg_latency = sum(map(windowed, |m| m.tunnel_latency_avg_ms)) / len(windowed)
+    let min_diversity = min(map(windowed, |m| m.jurisdiction_diversity))
+
+    let cortex_result = cortex_infer("vpn_health_classifier", {
+        deviations: map(windowed, |m| m.baseline_deviation),
+        anomaly_scores: map(windowed, |m| m.anomaly_score),
+        latency_trend: map(windowed, |m| m.tunnel_latency_avg_ms),
+        bandwidth_trend: map(windowed, |m| m.bandwidth_bytes_total),
+        mimicry_trend: map(windowed, |m| m.mimicry_coverage),
+        diversity_trend: map(windowed, |m| m.jurisdiction_diversity),
+        mimicry_failure_count: mimicry_failures,
+    })
+
+    let (status, confidence, explanation) = if mimicry_failures > 0 {
+        (HealthStatus::Critical, 1.0, "traffic mimicry coverage dropped below 95%")
+    } else if avg_latency > 200 {
+        (HealthStatus::Critical, 1.0, "tunnel latency exceeds 200ms threshold")
+    } else if max_anomaly > 0.8 || unhealthy_ratio > 0.5 {
+        (HealthStatus::Critical, max_anomaly, cortex_result.explanation)
+    } else if avg_deviation > 0.10 || unhealthy_ratio > 0.2 || min_diversity < 3 {
+        (HealthStatus::Degraded, avg_deviation, cortex_result.explanation)
+    } else {
+        (HealthStatus::Healthy, 1.0 - avg_deviation, "all tunnel operations within baseline")
+    }
+
+    streamsight_baseline("vpn_anomaly_score", window_ms)
+
+    (status, confidence, explanation)
+}

@@ -1,0 +1,311 @@
+/// Poly VPN Route DAG — Stratum DAG storage + Cortex AI governance
+///
+/// Multi-hop scatter routing modeled as a DAG. Each route is a directed
+/// acyclic path through the exit mesh. Acyclicity enforced to prevent
+/// routing loops. ML-DSA-87 signed; merkle-CSR backed; PoVC witnessed.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_identity from "../../../polykit/circuits/fl/polykit_identity.fl"
+import polykit_metering from "../../../polykit/circuits/fl/polykit_metering.fl"
+import polykit_governance from "../../../polykit/circuits/fl/polykit_governance.fl"
+
+// ── Enums ────────────────────────────────────────────────────────
+
+type RouteStatus = enum {
+    Building,
+    Active,
+    Rerouting,
+    TornDown,
+}
+
+// ── Data: Node types (Stratum store dag + Cortex) ────────────────
+
+data RouteNode : app v1 {
+    route_id: string,
+    exit_id: string,
+    hop_position: u8,
+    hop_key: string,
+    session_key_wrapped_hash: string,
+    encryption_layer: u8,
+    status: u8,
+    established_at: u64,
+    updated_at: u64,
+}
+    store dag
+    govern lex esn/global/org/polylabs/vpn
+    cortex {
+        redact [hop_key]
+        obfuscate [exit_id]
+        infer on_write
+        on_anomaly alert "vpn-ops"
+    }
+
+// ── Edge types ──────────────────────────────────────────────────
+
+type HopEdge = struct {
+    edge_id: bytes(16),
+    hop_index: u8,
+    latency_ns: u64,
+    encryption_overhead_ns: u64,
+    bandwidth_mbps: u32,
+}
+
+// ── DAG definition ──────────────────────────────────────────────
+
+dag tunnel_route {
+    node RouteNode
+    edge HopEdge
+
+    enforce acyclic
+    sign ml_dsa_87
+
+    overlay hop_latency: u64 curate delta_curate
+    overlay encryption_overhead: u64 curate delta_curate
+    overlay hop_status: u8 curate delta_curate
+
+    storage merkle_csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+
+    attest povc {
+        witness threshold(2, 3)
+    }
+
+    observe tunnel_route: [hop_latency, encryption_overhead, hop_status] threshold: {
+        anomaly_score 0.85
+        baseline_window 60
+    }
+
+    traverse route_path(entry: RouteNode) -> [RouteNode]
+    prove inclusion(hop: RouteNode, root: RouteNode) -> MerkleProof
+}
+
+series route_series: tunnel_route
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// ── Streams ─────────────────────────────────────────────────────
+
+stream route_mutations: event<RouteNode>
+    retention 90d
+    consumers [governance, audit, streamsight, vpn_ops]
+
+stream route_health_events: event<RouteNode>
+    retention 30d
+    consumers [streamsight, console, vpn_ops]
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit build_route(
+    user_id: bytes(16),
+    exit_ids: list<string>,
+    exit_pubkeys: list<bytes(1568)>,
+    signing_sk: bytes(4896),
+) -> list<RouteNode>
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    constant_time true
+    observe metrics: [routes_built, route_build_latency_ns, hops_created]
+    monitor "route_build_rate" { routes_built < 50/s }
+    invariant "min_hops" { len(exit_ids) >= 2 }
+    invariant "ids_keys_match" { len(exit_ids) == len(exit_pubkeys) }
+    invariant "no_duplicate_exits" { unique(exit_ids) }
+    meters [compute_cycles, memory_bytes]
+    wasm_abi [eslite_insert, now, csprng]
+    test golden "build_3_hop_route" {
+        let uid = bytes(16, 0xAA)
+        let sk = bytes(4896, 0xBB)
+        let exits = ["exit-1", "exit-2", "exit-3"]
+        let pks = [bytes(1568, 0xC1), bytes(1568, 0xC2), bytes(1568, 0xC3)]
+        let route = build_route(uid, exits, pks, sk)
+        assert len(route) == 3
+        assert route[0].hop_position == 0
+        assert route[2].hop_position == 2
+    }
+    kat_vector "mlkem_encaps_route" {
+        pk: bytes(1568, 0xC1)
+        function: mlkem_encaps
+    }
+    kat_vector "blake3_hop_key" {
+        input: bytes(64, 0xAA)
+        function: blake3
+        expected: blake3(bytes(64, 0xAA))
+    }
+    kat_vector "mldsa_sign_route" {
+        sk: bytes(4896, 0xBB)
+        message: bytes(128, 0xCC)
+        function: mldsa_sign
+    }
+{
+    let ts = now_ns() / 1000000
+    let route_seed = concat(user_id, csprng(16), ts)
+    let route_base = sha3_256(route_seed)
+
+    let nodes = []
+    let prev_node_id = ""
+
+    for i in 0..len(exit_ids) {
+        let hop_seed = concat(route_base, exit_ids[i], bytes(1, i))
+        let route_id = sha3_256(hop_seed)
+
+        let kem = mlkem_encaps(exit_pubkeys[i])
+        let hop_key = blake3(concat(kem, route_base, bytes(1, i)))
+        let wrapped_hash = sha3_256(kem)
+
+        let node = RouteNode {
+            route_id: route_id,
+            exit_id: exit_ids[i],
+            hop_position: i,
+            hop_key: hop_key,
+            session_key_wrapped_hash: wrapped_hash,
+            encryption_layer: len(exit_ids) - i,
+            status: 1,
+            established_at: ts,
+            updated_at: ts,
+        }
+
+        let _sig = mldsa_sign(signing_sk, serialize(node))
+        dag_insert(tunnel_route, node)
+
+        overlay_set(tunnel_route, route_id, hop_latency, 0)
+        overlay_set(tunnel_route, route_id, encryption_overhead, 0)
+        overlay_set(tunnel_route, route_id, hop_status, 1)
+
+        if prev_node_id != "" {
+            let hop_edge = HopEdge {
+                edge_id: bit_slice(sha3_256(concat(prev_node_id, route_id)), 0, 128),
+                hop_index: i,
+                latency_ns: 0,
+                encryption_overhead_ns: 0,
+                bandwidth_mbps: 0,
+            }
+            dag_connect(tunnel_route, prev_node_id, route_id, hop_edge)
+        }
+
+        prev_node_id = route_id
+        nodes = append(nodes, node)
+    }
+
+    polykit_metering::record_usage(user_id, "dag_route_build", DimensionValues {
+        executions: 1, hashes: len(exit_ids) * 3, bandwidth: 0,
+        storage: len(exit_ids) * 256, observables: len(exit_ids) * 3,
+        proofs: 1, circuits: 0, mpc_sessions: 0,
+    })
+
+    nodes
+}
+
+circuit teardown_route(
+    route_nodes: list<string>,
+    signing_sk: bytes(4896),
+) -> bool
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    observe metrics: [routes_torn_down]
+    invariant "has_nodes" { len(route_nodes) > 0 }
+    meters [compute_cycles]
+    wasm_abi [now]
+{
+    let ts = now_ns() / 1000000
+
+    for route_id in route_nodes {
+        let node = dag_query(tunnel_route, route_id)
+        let updated = RouteNode {
+            ...node,
+            status: 3,
+            hop_key: "",
+            updated_at: ts,
+        }
+        let _sig = mldsa_sign(signing_sk, serialize(updated))
+        dag_update(tunnel_route, updated)
+        overlay_set(tunnel_route, route_id, hop_status, 3)
+    }
+
+    emit(route_mutations, dag_query(tunnel_route, route_nodes[0]))
+    true
+}
+
+circuit reroute_hop(
+    route_id: string,
+    old_exit_id: string,
+    new_exit_id: string,
+    new_exit_pubkey: bytes(1568),
+    signing_sk: bytes(4896),
+) -> RouteNode
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    constant_time true
+    observe metrics: [hops_rerouted, reroute_latency_ns]
+    invariant "different_exit" { old_exit_id != new_exit_id }
+    meters [compute_cycles, memory_bytes]
+    wasm_abi [now, csprng]
+    fuzz_target "reroute_hop_fuzz" {
+        fuzz route_id: string { random }
+        fuzz old_exit_id: string { random }
+        fuzz new_exit_id: string { random, != old_exit_id }
+        fuzz new_exit_pubkey: bytes(1568, random)
+        fuzz signing_sk: bytes(4896, random)
+        assert output.status == 2
+    }
+{
+    let ts = now_ns() / 1000000
+    let node = dag_query(tunnel_route, route_id)
+
+    let kem = mlkem_encaps(new_exit_pubkey)
+    let new_hop_key = blake3(concat(kem, route_id, csprng(8)))
+    let wrapped_hash = sha3_256(kem)
+
+    let updated = RouteNode {
+        ...node,
+        exit_id: new_exit_id,
+        hop_key: new_hop_key,
+        session_key_wrapped_hash: wrapped_hash,
+        status: 2,
+        updated_at: ts,
+    }
+
+    let _sig = mldsa_sign(signing_sk, serialize(updated))
+    dag_update(tunnel_route, updated)
+    overlay_set(tunnel_route, route_id, hop_status, 2)
+
+    emit(route_mutations, updated)
+    updated
+}
+
+circuit prove_route_integrity(
+    route_nodes: list<string>,
+) -> bytes(32)
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    observe metrics: [integrity_proofs, proof_latency_ns]
+    invariant "has_nodes" { len(route_nodes) > 0 }
+    meters [compute_cycles]
+{
+    let hashes = parallel for route_id in route_nodes {
+        let node = dag_query(tunnel_route, route_id)
+        sha3_256(serialize(node))
+    }
+
+    let merkle_root = merkle_root(hashes)
+
+    let proof = dag_prove_inclusion(tunnel_route, route_nodes[0], merkle_root)
+    let valid = dag_verify_inclusion(tunnel_route, proof)
+
+    if not valid {
+        eslm_feed(tunnel_route, concat("integrity_failure:", route_nodes[0]), 1000)
+    }
+
+    merkle_root
+}

@@ -1,0 +1,240 @@
+/// Poly VPN DNS Protection — DNS-over-eStream with ad/tracker blocking
+///
+/// All DNS queries are PQ-encrypted and scatter-routed through the
+/// tunnel. No single DNS resolver sees all queries. Blocklists for
+/// ads, trackers, and malware are enforced client-side before queries
+/// leave the device.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Types ────────────────────────────────────────────────────────
+
+type DnsRecordType = enum {
+    A,
+    AAAA,
+    CNAME,
+    MX,
+    TXT,
+    SRV,
+    NS,
+    SOA,
+}
+
+type DnsQuery = struct {
+    query_id: bytes(16),
+    domain: string,
+    record_type: DnsRecordType,
+    user_id: bytes(16),
+    timestamp_ms: u64,
+    scatter_exit_id: bytes(16),
+}
+
+type DnsRecord = struct {
+    domain: string,
+    record_type: DnsRecordType,
+    value: string,
+    ttl_seconds: u32,
+}
+
+type DnsResponse = struct {
+    query_id: bytes(16),
+    records: list<DnsRecord>,
+    resolved_via: bytes(16),
+    latency_ms: u32,
+    cached: bool,
+    blocked: bool,
+    block_reason: string,
+}
+
+type BlocklistEntry = struct {
+    domain_hash: bytes(32),
+    category: u8,
+    source: string,
+    added_at: u64,
+}
+
+type BlockCategory = enum {
+    Ads,
+    Trackers,
+    Malware,
+    Phishing,
+    Adult,
+    Custom,
+}
+
+type DnsCache = struct {
+    domain_hash: bytes(32),
+    records: list<DnsRecord>,
+    cached_at: u64,
+    expires_at: u64,
+}
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit resolve_dns(
+    user_id: bytes(16),
+    domain: string,
+    record_type: DnsRecordType,
+    exit_id: bytes(16),
+    tunnel_key: bytes(32),
+) -> DnsResponse
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles, bandwidth]
+    observe metrics: [dns_queries, dns_latency_ms, cache_hits, blocked_queries]
+    monitor "dns_latency" { dns_latency_ms < 100 }
+    invariant "domain_nonempty" { len(domain) > 0 }
+    wasm_abi [now, csprng, dns_upstream]
+    test golden "resolve_dns_basic" {
+        let uid = bytes(16, 0x01)
+        let eid = bytes(16, 0x02)
+        let tk = bytes(32, 0xAA)
+        let resp = resolve_dns(uid, "example.com", A, eid, tk)
+        assert len(resp.query_id) == 16
+    }
+    kat_vector "sha3_256_domain_hash" {
+        input: "example.com"
+        function: sha3_256
+        expected: sha3_256("example.com")
+    }
+{
+    let ts = now_ns() / 1000000
+    let query_id = bit_slice(sha3_256(concat(user_id, domain, csprng(8), ts)), 0, 128)
+
+    let domain_hash = sha3_256(domain)
+    let cached = cache_lookup(domain_hash, record_type)
+    if cached.hit {
+        return DnsResponse {
+            query_id: query_id,
+            records: cached.records,
+            resolved_via: zero(16),
+            latency_ms: 0,
+            cached: true,
+            blocked: false,
+            block_reason: "",
+        }
+    }
+
+    let blocked = check_blocklist(domain)
+    if blocked.is_blocked {
+        return DnsResponse {
+            query_id: query_id,
+            records: [],
+            resolved_via: zero(16),
+            latency_ms: 0,
+            cached: false,
+            blocked: true,
+            block_reason: blocked.reason,
+        }
+    }
+
+    let query = DnsQuery {
+        query_id: query_id,
+        domain: domain,
+        record_type: record_type,
+        user_id: user_id,
+        timestamp_ms: ts,
+        scatter_exit_id: exit_id,
+    }
+
+    let encrypted_query = encrypt_query(query, tunnel_key)
+    let raw_response = dns_upstream(encrypted_query, exit_id)
+    let latency = (now_ns() / 1000000) - ts
+
+    let records = parse_dns_response(raw_response)
+    cache_store(domain_hash, records, records[0].ttl_seconds)
+
+    DnsResponse {
+        query_id: query_id,
+        records: records,
+        resolved_via: exit_id,
+        latency_ms: latency,
+        cached: false,
+        blocked: false,
+        block_reason: "",
+    }
+}
+
+circuit check_blocklist(
+    domain: string,
+) -> (bool, string)
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [blocklist_lookups, blocklist_hits]
+    invariant "domain_present" { len(domain) > 0 }
+{
+    let domain_hash = sha3_256(domain)
+    let parts = split(domain, ".")
+
+    for i in 0..len(parts) {
+        let suffix = join(parts[i..], ".")
+        let suffix_hash = sha3_256(suffix)
+        let entry = blocklist_lookup(suffix_hash)
+        if entry.found {
+            return (true, category_name(entry.category))
+        }
+    }
+
+    (false, "")
+}
+
+circuit cache_response(
+    domain: string,
+    records: list<DnsRecord>,
+    ttl_override: u32,
+) -> DnsCache
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles, storage]
+    observe metrics: [cache_stores, cache_evictions]
+    wasm_abi [now, eslite_insert]
+{
+    let ts = now_ns() / 1000000
+    let domain_hash = sha3_256(domain)
+    let ttl = if ttl_override > 0 { ttl_override } else {
+        min_of(records.*.ttl_seconds)
+    }
+
+    let entry = DnsCache {
+        domain_hash: domain_hash,
+        records: records,
+        cached_at: ts,
+        expires_at: ts + (ttl * 1000),
+    }
+
+    eslite_insert("dns_cache", domain_hash, serialize(entry))
+    entry
+}
+
+circuit encrypt_query(
+    query: DnsQuery,
+    tunnel_key: bytes(32),
+) -> bytes
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    meters [compute_cycles]
+    observe metrics: [queries_encrypted]
+    invariant "key_nonzero" { tunnel_key != zero(32) }
+    wasm_abi [csprng]
+    kat_vector "aes_gcm_encrypt_dns_query" {
+        key: bytes(32, 0xAA)
+        nonce: bytes(12, 0xBB)
+        plaintext: bytes(64, 0xCC)
+        aad: bytes(16, 0xDD)
+        function: aes_gcm_encrypt
+    }
+    fuzz_target "encrypt_query_fuzz" {
+        fuzz query: DnsQuery { random }
+        fuzz tunnel_key: bytes(32, random)
+        assert len(output) > 0
+    }
+{
+    let payload = serialize(query)
+    let nonce = bit_slice(csprng(12), 0, 96)
+    let aad = query.query_id
+    aes_gcm_encrypt(tunnel_key, nonce, payload, aad)
+}

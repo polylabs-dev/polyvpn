@@ -1,0 +1,205 @@
+/// Poly VPN Scatter Routing — VRF-directed stream splitting across exits
+///
+/// Traffic is split into multiple streams via VRF so that no single exit
+/// node sees more than a fraction of the user's traffic. Cover streams
+/// maintain constant aggregate bandwidth to resist traffic analysis.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Types ────────────────────────────────────────────────────────
+
+type ScatterConfig = struct {
+    user_id: bytes(16),
+    num_exits: u8,
+    cover_streams: u8,
+    total_bandwidth_mbps: u32,
+    rebalance_interval_ms: u64,
+    vrf_seed: bytes(32),
+}
+
+type StreamSplit = struct {
+    stream_id: bytes(16),
+    exit_id: bytes(16),
+    weight_pct: u8,
+    is_cover: bool,
+    assigned_bandwidth_mbps: u32,
+    vrf_proof: bytes(64),
+}
+
+type ExitAllocation = struct {
+    allocations: list<StreamSplit>,
+    total_exits: u8,
+    cover_exits: u8,
+    effective_bandwidth_mbps: u32,
+    created_at: u64,
+}
+
+type ReassembledStream = struct {
+    sequence: u64,
+    payload: bytes,
+    source_streams: u8,
+    integrity_hash: bytes(32),
+}
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit split_stream(
+    config: ScatterConfig,
+    packet: bytes,
+    allocation: ExitAllocation,
+) -> list<(bytes(16), bytes)>
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles, bandwidth]
+    observe metrics: [streams_split, split_latency_ns, packets_scattered]
+    invariant "min_exits" { config.num_exits >= 2 }
+    invariant "weight_sum_100" { sum(allocation.allocations.*.weight_pct) == 100 }
+    invariant "packet_nonempty" { len(packet) > 0 }
+    wasm_abi [csprng]
+    monitor "scatter_split_rate" { streams_split < 1000/s }
+    test golden "split_stream_basic" {
+        let cfg = ScatterConfig {
+            user_id: bytes(16, 0x01), num_exits: 3, cover_streams: 1,
+            total_bandwidth_mbps: 100, rebalance_interval_ms: 5000,
+            vrf_seed: bytes(32, 0xAA),
+        }
+        let pkt = bytes(1500, 0xBB)
+        let alloc = ExitAllocation {
+            allocations: [
+                StreamSplit { stream_id: bytes(16, 0x01), exit_id: bytes(16, 0x10), weight_pct: 34, is_cover: false, assigned_bandwidth_mbps: 34, vrf_proof: bytes(64, 0x00) },
+                StreamSplit { stream_id: bytes(16, 0x02), exit_id: bytes(16, 0x20), weight_pct: 33, is_cover: false, assigned_bandwidth_mbps: 33, vrf_proof: bytes(64, 0x00) },
+                StreamSplit { stream_id: bytes(16, 0x03), exit_id: bytes(16, 0x30), weight_pct: 33, is_cover: false, assigned_bandwidth_mbps: 33, vrf_proof: bytes(64, 0x00) },
+            ],
+            total_exits: 3, cover_exits: 0, effective_bandwidth_mbps: 100, created_at: 0,
+        }
+        let fragments = split_stream(cfg, pkt, alloc)
+        assert len(fragments) == 3
+    }
+{
+    let num_real = config.num_exits
+    let chunk_size = len(packet) / num_real
+    let fragments = parallel for i in 0..num_real {
+        let alloc = allocation.allocations[i]
+        if alloc.is_cover {
+            let cover = csprng(chunk_size)
+            (alloc.exit_id, cover)
+        } else {
+            let start = i * chunk_size
+            let end = if i == num_real - 1 { len(packet) } else { (i + 1) * chunk_size }
+            let fragment = bit_slice_bytes(packet, start, end)
+            let tagged = concat(bytes(1, i), fragment)
+            (alloc.exit_id, tagged)
+        }
+    }
+    fragments
+}
+
+circuit allocate_exits(
+    config: ScatterConfig,
+    available_exits: list<bytes(16)>,
+    latencies: list<u64>,
+    loads: list<u8>,
+) -> ExitAllocation
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [allocations_computed, exits_selected]
+    invariant "enough_exits" { len(available_exits) >= config.num_exits + config.cover_streams }
+    invariant "arrays_match" { len(available_exits) == len(latencies) }
+    wasm_abi [now, csprng]
+{
+    let ts = now_ns() / 1000000
+    let total = config.num_exits + config.cover_streams
+    let vrf_out = vrf_evaluate(config.vrf_seed, concat(config.user_id, ts))
+
+    let selected = vrf_select(vrf_out, available_exits, total, latencies, loads)
+
+    let base_weight = 100 / config.num_exits
+    let remainder = 100 - (base_weight * config.num_exits)
+
+    let allocations = parallel for i in 0..total {
+        let is_cover = i >= config.num_exits
+        let weight = if is_cover { 0 } else if i == 0 { base_weight + remainder } else { base_weight }
+        let bw = if is_cover { config.total_bandwidth_mbps / 10 } else {
+            (config.total_bandwidth_mbps * weight) / 100
+        }
+        let proof = vrf_prove(config.vrf_seed, concat(selected[i], i))
+        let sid = sha3_256(concat(config.user_id, selected[i], csprng(8)))
+
+        StreamSplit {
+            stream_id: bit_slice(sid, 0, 128),
+            exit_id: selected[i],
+            weight_pct: weight,
+            is_cover: is_cover,
+            assigned_bandwidth_mbps: bw,
+            vrf_proof: proof,
+        }
+    }
+
+    ExitAllocation {
+        allocations: allocations,
+        total_exits: total,
+        cover_exits: config.cover_streams,
+        effective_bandwidth_mbps: config.total_bandwidth_mbps,
+        created_at: ts,
+    }
+}
+
+circuit reassemble_stream(
+    fragments: list<(u8, bytes)>,
+    expected_count: u8,
+) -> ReassembledStream
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles, bandwidth]
+    observe metrics: [streams_reassembled, reassembly_latency_ns, fragments_processed]
+    invariant "all_fragments" { len(fragments) == expected_count }
+    wasm_abi [now]
+    kat_vector "sha3_256_integrity" {
+        input: bytes(256, 0xAA)
+        function: sha3_256
+        expected: sha3_256(bytes(256, 0xAA))
+    }
+{
+    let sorted = sort_by(fragments, |f| f.0)
+    let payload = concat_all(sorted.*.1)
+    let integrity = sha3_256(payload)
+
+    ReassembledStream {
+        sequence: now_ns(),
+        payload: payload,
+        source_streams: expected_count,
+        integrity_hash: integrity,
+    }
+}
+
+circuit verify_coverage(
+    allocation: ExitAllocation,
+    config: ScatterConfig,
+) -> bool
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    observe metrics: [coverage_checks, coverage_failures]
+    invariant "has_allocations" { len(allocation.allocations) > 0 }
+{
+    let real_count = 0
+    let cover_count = 0
+    let weight_sum = 0
+
+    for alloc in allocation.allocations {
+        if alloc.is_cover { cover_count = cover_count + 1 }
+        else {
+            real_count = real_count + 1
+            weight_sum = weight_sum + alloc.weight_pct
+        }
+    }
+
+    let exits_ok = real_count >= config.num_exits
+    let cover_ok = cover_count >= config.cover_streams
+    let weight_ok = weight_sum == 100
+    let no_duplicate_exits = unique(allocation.allocations.*.exit_id)
+
+    exits_ok and cover_ok and weight_ok and no_duplicate_exits
+}

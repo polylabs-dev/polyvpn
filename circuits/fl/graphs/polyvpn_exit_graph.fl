@@ -1,0 +1,416 @@
+/// Poly VPN Exit Graph — Stratum graph storage + Cortex AI governance
+///
+/// Models the exit node network as a typed graph with real-time overlays.
+/// Cortex redacts endpoint addresses and private key hashes; obfuscates
+/// jurisdiction and operator identity. The ai_feed drives optimal
+/// multi-exit scatter route selection.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_identity from "../../../polykit/circuits/fl/polykit_identity.fl"
+import polykit_metering from "../../../polykit/circuits/fl/polykit_metering.fl"
+import polykit_governance from "../../../polykit/circuits/fl/polykit_governance.fl"
+
+// ── Enums ────────────────────────────────────────────────────────
+
+type ExitOperatorType = enum {
+    PolyLabs,
+    Partner,
+    Dedicated,
+}
+
+type ExitStatus = enum {
+    Online,
+    Degraded,
+    Offline,
+    Blacklisted,
+}
+
+// ── Data: Node types (Stratum store graph + Cortex) ─────────────
+
+data ExitNode : app v1 {
+    exit_id: string,
+    region: string,
+    endpoint_address: string,
+    capacity_mbps: u32,
+    pubkey_hash: string,
+    private_key_hash: string,
+    jurisdiction: string,
+    operator_id: string,
+    operator_type: u8,
+    attestation_hash: string,
+    created_at: u64,
+    updated_at: u64,
+}
+    store graph
+    govern lex esn/global/org/polylabs/vpn
+    cortex {
+        redact [endpoint_address, private_key_hash]
+        obfuscate [jurisdiction, operator_id]
+        infer on_read
+        on_anomaly alert "vpn-ops"
+    }
+
+data PeerNode : app v1 {
+    peer_id: string,
+    exit_id: string,
+    connected_at: u64,
+    latency_ns: u64,
+    bandwidth_mbps: u32,
+}
+    store graph
+    govern lex esn/global/org/polylabs/vpn
+    cortex {
+        obfuscate [peer_id]
+        infer on_read
+    }
+
+// ── Edge types ──────────────────────────────────────────────────
+
+type TunnelEdge = struct {
+    edge_id: bytes(16),
+    hop_index: u8,
+    encryption_layer: u8,
+    session_key_hash: bytes(32),
+    established_at: u64,
+    latency_ns: u64,
+}
+
+type PeerEdge = struct {
+    edge_id: bytes(16),
+    connected_at: u64,
+    bandwidth_mbps: u32,
+    latency_ns: u64,
+    health_score: u8,
+}
+
+// ── Graph definition ────────────────────────────────────────────
+
+graph vpn_exit_mesh {
+    node ExitNode
+    node PeerNode
+    edge TunnelEdge
+    edge PeerEdge
+
+    overlay latency_ns: u64 curate delta_curate
+    overlay bandwidth_mbps: u32 curate delta_curate
+    overlay load_pct: u8 curate delta_curate
+    overlay jurisdiction: bytes(4) curate
+    overlay blacklist_status: u8 curate delta_curate
+
+    storage csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+
+    ai_feed exit_selection {
+        predict [latency_ns, load_pct, bandwidth_mbps]
+        suggest [optimal_exit_set, rebalance_trigger]
+        confidence 0.85
+    }
+
+    observe vpn_exit_mesh: [latency_ns, load_pct, bandwidth_mbps, blacklist_status] threshold: {
+        anomaly_score 0.80
+        baseline_window 30
+    }
+}
+
+series exit_series: vpn_exit_mesh
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+// ── Streams ─────────────────────────────────────────────────────
+
+stream exit_graph_mutations: event<ExitNode>
+    retention 365d
+    consumers [governance, audit, streamsight, vpn_ops]
+
+stream exit_health_events: event<ExitNode>
+    retention 90d
+    consumers [streamsight, console, vpn_ops]
+
+// ── Circuits: Node management ───────────────────────────────────
+
+circuit register_exit(
+    operator_pk: bytes(2592),
+    region: string,
+    endpoint_address: string,
+    capacity_mbps: u32,
+    exit_pubkey: bytes(1568),
+    jurisdiction: string,
+    operator_type: u8,
+    signing_sk: bytes(4896),
+) -> ExitNode
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    constant_time true
+    observe metrics: [exits_registered, exit_register_latency_ns]
+    monitor "exit_registration_rate" { exits_registered < 20/s }
+    invariant "valid_region" { len(region) > 0 }
+    invariant "valid_capacity" { capacity_mbps > 0 }
+    invariant "valid_operator_type" { operator_type <= 2 }
+    meters [compute_cycles, memory_bytes]
+    wasm_abi [eslite_insert, now, csprng]
+    test golden "register_public_exit" {
+        let pk = bytes(2592, 0xAA)
+        let epk = bytes(1568, 0xCC)
+        let sk = bytes(4896, 0xBB)
+        let exit = register_exit(pk, "us-east", "10.0.0.1:5000", 1000, epk, "US", 0, sk)
+        assert len(exit.exit_id) > 0
+        assert exit.region == "us-east"
+        assert exit.operator_type == 0
+    }
+    kat_vector "sha3_256_exit_seed" {
+        input: bytes(64, 0xAA)
+        function: sha3_256
+        expected: sha3_256(bytes(64, 0xAA))
+    }
+    kat_vector "mldsa_sign_exit" {
+        sk: bytes(4896, 0xBB)
+        message: bytes(128, 0xCC)
+        function: mldsa_sign
+    }
+{
+    let operator_id = polykit_identity::derive_user_id(operator_pk)
+    let ts = now_ns() / 1000000
+    let exit_seed = concat(operator_id, region, csprng(16), ts)
+    let exit_id = sha3_256(exit_seed)
+    let pubkey_hash = sha3_256(exit_pubkey)
+    let pk_hash = sha3_256(concat(exit_pubkey, operator_id))
+
+    let exit = ExitNode {
+        exit_id: exit_id,
+        region: region,
+        endpoint_address: endpoint_address,
+        capacity_mbps: capacity_mbps,
+        pubkey_hash: pubkey_hash,
+        private_key_hash: pk_hash,
+        jurisdiction: jurisdiction,
+        operator_id: operator_id,
+        operator_type: operator_type,
+        attestation_hash: "",
+        created_at: ts,
+        updated_at: ts,
+    }
+
+    let _sig = mldsa_sign(signing_sk, serialize(exit))
+    graph_insert(vpn_exit_mesh, exit)
+
+    overlay_set(vpn_exit_mesh, exit_id, latency_ns, 0)
+    overlay_set(vpn_exit_mesh, exit_id, bandwidth_mbps, capacity_mbps)
+    overlay_set(vpn_exit_mesh, exit_id, load_pct, 0)
+    overlay_set(vpn_exit_mesh, exit_id, jurisdiction, jurisdiction)
+    overlay_set(vpn_exit_mesh, exit_id, blacklist_status, 0)
+
+    polykit_metering::record_usage(operator_id, "graph_exit_register", DimensionValues {
+        executions: 1, hashes: 3, bandwidth: 0,
+        storage: 512, observables: 5, proofs: 1, circuits: 0, mpc_sessions: 0,
+    })
+
+    exit
+}
+
+circuit select_exits(
+    user_id: bytes(16),
+    num_exits: u8,
+    preferred_regions: list<string>,
+    avoid_jurisdictions: list<string>,
+    min_bandwidth_mbps: u32,
+) -> list<ExitNode>
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision B
+    observe metrics: [exit_selections, selection_latency_ns, ai_suggestions_used]
+    invariant "min_exits" { num_exits >= 2 }
+    meters [compute_cycles]
+{
+    let candidates = graph_query_all(vpn_exit_mesh, ExitNode)
+
+    let filtered = filter(candidates, |exit| {
+        let bl = overlay_get(vpn_exit_mesh, exit.exit_id, blacklist_status)
+        let bw = overlay_get(vpn_exit_mesh, exit.exit_id, bandwidth_mbps)
+        let load = overlay_get(vpn_exit_mesh, exit.exit_id, load_pct)
+        let jur = exit.jurisdiction
+        bl == 0 and bw >= min_bandwidth_mbps and load < 90
+            and not contains(avoid_jurisdictions, jur)
+    })
+
+    let ai_suggestion = eslm_query(exit_selection, {
+        user_id: user_id,
+        num_needed: num_exits,
+        preferred_regions: preferred_regions,
+        candidates: filtered,
+    })
+
+    if ai_suggestion.confidence >= 0.85 {
+        take(ai_suggestion.selected, num_exits)
+    } else {
+        let scored = sort_by(filtered, |exit| {
+            let lat = overlay_get(vpn_exit_mesh, exit.exit_id, latency_ns)
+            let load = overlay_get(vpn_exit_mesh, exit.exit_id, load_pct)
+            let region_bonus = if contains(preferred_regions, exit.region) { 0 } else { 1000000 }
+            lat + (load * 100000) + region_bonus
+        })
+        take(scored, num_exits)
+    }
+}
+
+circuit rotate_exits(
+    user_id: bytes(16),
+    current_exits: list<string>,
+    rotation_count: u8,
+    preferred_regions: list<string>,
+    avoid_jurisdictions: list<string>,
+) -> list<ExitNode>
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision B
+    observe metrics: [exit_rotations]
+    invariant "valid_rotation" { rotation_count <= len(current_exits) }
+    meters [compute_cycles]
+{
+    let keep_count = len(current_exits) - rotation_count
+    let keepers = take(current_exits, keep_count)
+
+    let new_exits = select_exits(
+        user_id,
+        rotation_count,
+        preferred_regions,
+        avoid_jurisdictions,
+        0,
+    )
+
+    let all_exits = []
+    for eid in keepers {
+        let exit = graph_query(vpn_exit_mesh, eid)
+        all_exits = append(all_exits, exit)
+    }
+    for exit in new_exits {
+        all_exits = append(all_exits, exit)
+    }
+    all_exits
+}
+
+circuit update_exit_health(
+    exit_id: string,
+    latency_ns: u64,
+    bandwidth_mbps: u32,
+    load_pct: u8,
+    signing_sk: bytes(4896),
+) -> bool
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision B
+    observe metrics: [health_updates, degraded_exits]
+    monitor "exit_health_lag" { health_updates > 0 }
+    meters [compute_cycles]
+    wasm_abi [now]
+{
+    let ts = now_ns() / 1000000
+
+    overlay_set(vpn_exit_mesh, exit_id, latency_ns, latency_ns)
+    overlay_set(vpn_exit_mesh, exit_id, bandwidth_mbps, bandwidth_mbps)
+    overlay_set(vpn_exit_mesh, exit_id, load_pct, load_pct)
+
+    let exit = graph_query(vpn_exit_mesh, exit_id)
+    let updated = ExitNode { ...exit, updated_at: ts }
+    let _sig = mldsa_sign(signing_sk, serialize(updated))
+    graph_update(vpn_exit_mesh, updated)
+
+    eslm_feed(exit_selection, serialize({
+        exit_id: exit_id,
+        latency_ns: latency_ns,
+        bandwidth_mbps: bandwidth_mbps,
+        load_pct: load_pct,
+        timestamp: ts,
+    }), load_pct)
+
+    if load_pct > 85 or latency_ns > 200000000 {
+        emit(exit_health_events, updated)
+    }
+
+    true
+}
+
+circuit blacklist_exit(
+    exit_id: string,
+    reason: string,
+    signing_sk: bytes(4896),
+) -> bool
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    observe metrics: [exits_blacklisted]
+    meters [compute_cycles]
+    wasm_abi [now]
+{
+    let ts = now_ns() / 1000000
+    overlay_set(vpn_exit_mesh, exit_id, blacklist_status, 1)
+
+    let exit = graph_query(vpn_exit_mesh, exit_id)
+    let updated = ExitNode { ...exit, updated_at: ts }
+    let _sig = mldsa_sign(signing_sk, serialize(updated))
+    graph_update(vpn_exit_mesh, updated)
+
+    emit(exit_graph_mutations, updated)
+
+    eslm_feed(exit_selection, concat("blacklisted:", exit_id, ":", reason), 1000)
+
+    true
+}
+
+circuit attest_exit(
+    exit_id: string,
+    hardware_attestation: bytes,
+    operator_pk: bytes(2592),
+    signing_sk: bytes(4896),
+) -> string
+    lex esn/global/org/polylabs/vpn
+    status production
+    precision C
+    povc true
+    constant_time true
+    observe metrics: [attestations_performed, attestation_failures]
+    invariant "attestation_nonempty" { len(hardware_attestation) > 0 }
+    meters [compute_cycles, memory_bytes]
+    wasm_abi [now]
+    fuzz_target "attest_exit_fuzz" {
+        fuzz exit_id: string { random }
+        fuzz hardware_attestation: bytes(random, 32..512)
+        fuzz operator_pk: bytes(2592, random)
+        fuzz signing_sk: bytes(4896, random)
+        assert len(output) == 32
+    }
+{
+    let ts = now_ns() / 1000000
+    let operator_id = polykit_identity::derive_user_id(operator_pk)
+
+    let attestation_payload = concat(
+        exit_id,
+        hardware_attestation,
+        operator_id,
+        ts,
+    )
+    let attestation_hash = sha3_256(attestation_payload)
+    let _sig = mldsa_sign(signing_sk, attestation_payload)
+
+    let exit = graph_query(vpn_exit_mesh, exit_id)
+    let updated = ExitNode {
+        ...exit,
+        attestation_hash: attestation_hash,
+        updated_at: ts,
+    }
+    graph_update(vpn_exit_mesh, updated)
+
+    polykit_metering::record_usage(operator_id, "graph_exit_attest", DimensionValues {
+        executions: 1, hashes: 2, bandwidth: 0,
+        storage: 256, observables: 1, proofs: 1, circuits: 0, mpc_sessions: 0,
+    })
+
+    attestation_hash
+}

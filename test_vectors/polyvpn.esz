@@ -1,0 +1,127 @@
+{
+  "suite": "polyvpn_golden",
+  "version": "0.1.0",
+  "vectors": [
+    {
+      "name": "happy_path_tunnel_establish",
+      "circuit": "polyvpn_tunnel",
+      "input": {
+        "operation": "tunnel_create",
+        "client_spark_id": "spark:polyvpn:user_alpha",
+        "entry_node": "node:scatter:entry_01",
+        "exit_region": "us-east",
+        "scatter_hops": 3,
+        "kem_algorithm": "ML-KEM-1024",
+        "mimicry_profile": "https_tls13",
+        "dns_mode": "doh"
+      },
+      "expected_output": {
+        "status": "tunnel_established",
+        "hops": 3,
+        "all_hops_pq_encrypted": true,
+        "mimicry_active": true,
+        "mimicry_protocol": "https_tls13",
+        "dns_over_https": true,
+        "killswitch_armed": true,
+        "scatter_routed": true
+      },
+      "expected_witness_tier": 2
+    },
+    {
+      "name": "edge_case_killswitch_on_tunnel_drop",
+      "circuit": "polyvpn_killswitch",
+      "input": {
+        "operation": "tunnel_drop",
+        "client_spark_id": "spark:polyvpn:user_alpha",
+        "tunnel_id": "tunnel:pv:alpha_001",
+        "drop_reason": "node_unreachable",
+        "killswitch_enabled": true,
+        "active_connections": 12
+      },
+      "expected_output": {
+        "status": "killswitch_activated",
+        "all_traffic_blocked": true,
+        "dns_blocked": true,
+        "connections_terminated": 12,
+        "leak_prevention": true,
+        "auto_reconnect_scheduled": true,
+        "reconnect_to_different_path": true
+      },
+      "expected_witness_tier": 2
+    },
+    {
+      "name": "crypto_verify_scatter_route_encryption",
+      "circuit": "polyvpn_scatter_route",
+      "input": {
+        "operation": "route_packet",
+        "tunnel_id": "tunnel:pv:alpha_001",
+        "hop_count": 3,
+        "per_hop_kem": "ML-KEM-1024",
+        "onion_layers": 3,
+        "hkdf_context": "poly-vpn-v1",
+        "payload_size_bytes": 1500
+      },
+      "expected_output": {
+        "all_layers_encrypted": true,
+        "per_hop_keys_independent": true,
+        "no_hop_sees_plaintext": true,
+        "no_hop_knows_both_endpoints": true,
+        "hkdf_context_matches": "poly-vpn-v1",
+        "key_isolation_verified": true,
+        "padding_applied": true,
+        "padded_size_uniform": true
+      },
+      "expected_witness_tier": 2
+    },
+    {
+      "name": "telemetry_isolation_blinded_metrics",
+      "circuit": "polyvpn_observe",
+      "input": {
+        "operation": "tunnel_create",
+        "spark_id": "spark:polyvpn:user_beta",
+        "bandwidth_bytes": 1048576,
+        "emit_metrics": ["tunnel_creates", "bandwidth_bytes", "scatter_routes", "mimicry_activations"]
+      },
+      "expected_output": {
+        "metrics_emitted": 4,
+        "blinded_id_used": true,
+        "cross_product_leak": false,
+        "lex_namespace": "polyvpn",
+        "aggregate_window_ms": 3600000,
+        "cohort_min_met": true,
+        "noise_applied": true,
+        "no_traffic_pattern_leak": true
+      },
+      "expected_witness_tier": 2
+    },
+    {
+      "name": "error_dns_resolution_poisoning_detected",
+      "circuit": "polyvpn_dns",
+      "input": {
+        "operation": "dns_resolve",
+        "tunnel_id": "tunnel:pv:alpha_001",
+        "query": "example.com",
+        "dns_mode": "doh",
+        "response_ip": "192.168.1.1",
+        "dnssec_valid": false,
+        "known_poison_signatures": ["redirect_to_private_range"]
+      },
+      "expected_output": {
+        "status": "error",
+        "error_code": "DNS_POISONING_DETECTED",
+        "poisoning_indicator": "redirect_to_private_range",
+        "resolution_blocked": true,
+        "fallback_resolver_tried": true,
+        "user_warned": true,
+        "incident_logged_blinded": true
+      },
+      "expected_witness_tier": 2
+    }
+  ],
+  "telemetry_isolation": {
+    "verify_blinded_id": true,
+    "verify_no_cross_product": true,
+    "verify_cohort_min": 50,
+    "verify_aggregate_window_ms": 3600000
+  }
+}

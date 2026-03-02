@@ -1,0 +1,127 @@
+/// Poly VPN Metering — Per-product 8D metering for VPN operations
+///
+/// Maps VPN operations to PolyKit metering dimensions.
+/// Isolated under polylabs.vpn.metering lex — no cross-product aggregation.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Metering Maps ────────────────────────────────────────────────
+//
+// Operation          | Dimensions
+// -------------------|------------------------------------
+// tunnel             | Bandwidth, Executions, Hashes
+// dns                | Executions, Observables
+// mimicry            | Executions, Circuits
+// scatter            | Bandwidth, Hashes
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit meter_tunnel(
+    user_id: bytes(16),
+    bytes_transferred: u64,
+    packets: u64,
+) -> MeteringRecord
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [tunnel_metering_events]
+    monitor "tunnel_metering_rate" { tunnel_metering_events < 5000/s }
+    test golden "meter_tunnel_basic" {
+        let uid = bytes(16, 0x01)
+        let record = meter_tunnel(uid, 1024, 10)
+        assert record != null
+    }
+{
+    polykit_metering::record_usage(user_id, "vpn_tunnel", DimensionValues {
+        executions: packets,
+        hashes: packets,
+        bandwidth: bytes_transferred,
+        storage: 0,
+        observables: 0,
+        proofs: 0,
+        circuits: 0,
+        mpc_sessions: 0,
+    })
+}
+
+circuit meter_dns(
+    user_id: bytes(16),
+    queries: u64,
+    blocked: u64,
+) -> MeteringRecord
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [dns_metering_events]
+{
+    polykit_metering::record_usage(user_id, "vpn_dns", DimensionValues {
+        executions: queries,
+        hashes: 0,
+        bandwidth: 0,
+        storage: 0,
+        observables: queries + blocked,
+        proofs: 0,
+        circuits: 0,
+        mpc_sessions: 0,
+    })
+}
+
+circuit meter_mimicry(
+    user_id: bytes(16),
+    packets_shaped: u64,
+    profiles_applied: u64,
+) -> MeteringRecord
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [mimicry_metering_events]
+{
+    polykit_metering::record_usage(user_id, "vpn_mimicry", DimensionValues {
+        executions: packets_shaped,
+        hashes: 0,
+        bandwidth: 0,
+        storage: 0,
+        observables: 0,
+        proofs: 0,
+        circuits: profiles_applied,
+        mpc_sessions: 0,
+    })
+}
+
+circuit meter_scatter(
+    user_id: bytes(16),
+    bytes_scattered: u64,
+    fragments: u64,
+) -> MeteringRecord
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [scatter_metering_events]
+{
+    polykit_metering::record_usage(user_id, "vpn_scatter", DimensionValues {
+        executions: 0,
+        hashes: fragments,
+        bandwidth: bytes_scattered,
+        storage: 0,
+        observables: 0,
+        proofs: 0,
+        circuits: 0,
+        mpc_sessions: 0,
+    })
+}
+
+circuit check_vpn_limits(
+    user_id: bytes(16),
+    tier_name: string,
+    tier_limits: TierLimits,
+) -> list<MeteringDimension>
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [limit_checks, limit_violations]
+{
+    let current = polykit_metering::get_usage_summary(user_id)
+    polykit_metering::check_limits(current, tier_limits)
+}

@@ -1,0 +1,291 @@
+/// Poly VPN Traffic Mimicry — Statistical traffic analysis resistance
+///
+/// CLASSIFICATION: TRADE SECRET
+/// Implementation shapes scatter streams to match popular application
+/// traffic signatures. DPI and statistical classifiers see Netflix,
+/// YouTube, iCloud, Spotify, or Zoom — not VPN traffic.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Types ────────────────────────────────────────────────────────
+
+type MimicryProfile = enum {
+    Netflix,
+    YouTube,
+    ICloud,
+    Spotify,
+    Zoom,
+    Custom,
+}
+
+type TrafficShape = struct {
+    profile: MimicryProfile,
+    avg_packet_size: u32,
+    packet_size_stddev: u32,
+    inter_packet_delay_us: u32,
+    delay_jitter_us: u32,
+    burst_size: u32,
+    burst_interval_ms: u32,
+    downstream_ratio: u8,
+    tls_fingerprint: bytes(32),
+    sni_template: string,
+}
+
+type PaddingConfig = struct {
+    min_packet_size: u32,
+    max_packet_size: u32,
+    pad_to_distribution: bool,
+    noise_bytes_per_packet: u32,
+    timing_noise_us: u32,
+}
+
+type ShapedPacket = struct {
+    payload: bytes,
+    padded_size: u32,
+    delay_us: u32,
+    burst_index: u32,
+    mimicry_profile: MimicryProfile,
+}
+
+type FingerprintResult = struct {
+    detected_profile: string,
+    confidence: f64,
+    is_vpn_detected: bool,
+    features_matched: u32,
+    features_total: u32,
+}
+
+// ── Shape Lookup ─────────────────────────────────────────────────
+
+circuit get_traffic_shape(profile: MimicryProfile) -> TrafficShape
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    blind full
+    observe metrics: [shape_lookups]
+    kat_vector "sha3_256_fingerprint" {
+        input: "netflix-ja4-v1"
+        function: sha3_256
+        expected: sha3_256("netflix-ja4-v1")
+    }
+{
+    match profile {
+        Netflix => TrafficShape {
+            profile: Netflix,
+            avg_packet_size: 1350,
+            packet_size_stddev: 200,
+            inter_packet_delay_us: 800,
+            delay_jitter_us: 150,
+            burst_size: 64,
+            burst_interval_ms: 250,
+            downstream_ratio: 92,
+            tls_fingerprint: sha3_256("netflix-ja4-v1"),
+            sni_template: "*.nflxvideo.net",
+        },
+        YouTube => TrafficShape {
+            profile: YouTube,
+            avg_packet_size: 1200,
+            packet_size_stddev: 350,
+            inter_packet_delay_us: 1200,
+            delay_jitter_us: 400,
+            burst_size: 32,
+            burst_interval_ms: 500,
+            downstream_ratio: 88,
+            tls_fingerprint: sha3_256("youtube-ja4-v1"),
+            sni_template: "*.googlevideo.com",
+        },
+        ICloud => TrafficShape {
+            profile: ICloud,
+            avg_packet_size: 512,
+            packet_size_stddev: 128,
+            inter_packet_delay_us: 5000,
+            delay_jitter_us: 2000,
+            burst_size: 8,
+            burst_interval_ms: 30000,
+            downstream_ratio: 55,
+            tls_fingerprint: sha3_256("icloud-ja4-v1"),
+            sni_template: "*.icloud-content.com",
+        },
+        Spotify => TrafficShape {
+            profile: Spotify,
+            avg_packet_size: 800,
+            packet_size_stddev: 100,
+            inter_packet_delay_us: 2000,
+            delay_jitter_us: 200,
+            burst_size: 16,
+            burst_interval_ms: 10000,
+            downstream_ratio: 95,
+            tls_fingerprint: sha3_256("spotify-ja4-v1"),
+            sni_template: "*.scdn.co",
+        },
+        Zoom => TrafficShape {
+            profile: Zoom,
+            avg_packet_size: 1000,
+            packet_size_stddev: 150,
+            inter_packet_delay_us: 33333,
+            delay_jitter_us: 5000,
+            burst_size: 4,
+            burst_interval_ms: 33,
+            downstream_ratio: 50,
+            tls_fingerprint: sha3_256("zoom-ja4-v1"),
+            sni_template: "*.zoom.us",
+        },
+        Custom => TrafficShape {
+            profile: Custom,
+            avg_packet_size: 1024,
+            packet_size_stddev: 256,
+            inter_packet_delay_us: 1000,
+            delay_jitter_us: 500,
+            burst_size: 16,
+            burst_interval_ms: 1000,
+            downstream_ratio: 70,
+            tls_fingerprint: sha3_256("custom-ja4-v1"),
+            sni_template: "*.cdn.cloudflare.net",
+        },
+    }
+}
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit shape_traffic(
+    packet: bytes,
+    shape: TrafficShape,
+    sequence: u64,
+) -> ShapedPacket
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    blind full
+    meters [compute_cycles, bandwidth]
+    observe metrics: [packets_shaped, shaping_latency_ns]
+    invariant "packet_nonempty" { len(packet) > 0 }
+    wasm_abi [csprng]
+    monitor "shaping_latency" { shaping_latency_ns < 1000000 }
+    test golden "shape_traffic_netflix" {
+        let pkt = bytes(512, 0xAA)
+        let shape = get_traffic_shape(Netflix)
+        let shaped = shape_traffic(pkt, shape, 0)
+        assert shaped.mimicry_profile == Netflix
+        assert shaped.padded_size >= 512
+    }
+    fuzz_target "shape_traffic_fuzz" {
+        fuzz packet: bytes(random, 1..2048)
+        fuzz shape: TrafficShape { random }
+        fuzz sequence: u64 { random }
+        assert len(output.payload) > 0
+    }
+{
+    let target_size = gaussian_sample(shape.avg_packet_size, shape.packet_size_stddev, csprng(4))
+    let padded = if len(packet) < target_size {
+        pad_to_size(packet, target_size)
+    } else {
+        packet
+    }
+
+    let base_delay = shape.inter_packet_delay_us
+    let jitter = gaussian_sample(0, shape.delay_jitter_us, csprng(4))
+    let delay = max(0, base_delay + jitter)
+
+    let burst_idx = sequence % shape.burst_size
+
+    ShapedPacket {
+        payload: padded,
+        padded_size: len(padded),
+        delay_us: delay,
+        burst_index: burst_idx,
+        mimicry_profile: shape.profile,
+    }
+}
+
+circuit apply_mimicry_profile(
+    packets: list<bytes>,
+    profile: MimicryProfile,
+) -> list<ShapedPacket>
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    blind full
+    meters [compute_cycles, bandwidth]
+    observe metrics: [profiles_applied, batch_size]
+{
+    let shape = get_traffic_shape(profile)
+    parallel for i in 0..len(packets) {
+        shape_traffic(packets[i], shape, i)
+    }
+}
+
+circuit generate_padding(
+    config: PaddingConfig,
+    count: u32,
+) -> list<bytes>
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    blind full
+    meters [bandwidth]
+    observe metrics: [padding_generated_bytes, padding_packets]
+    wasm_abi [csprng]
+{
+    parallel for i in 0..count {
+        let size = if config.pad_to_distribution {
+            gaussian_sample(
+                (config.min_packet_size + config.max_packet_size) / 2,
+                (config.max_packet_size - config.min_packet_size) / 6,
+                csprng(4),
+            )
+        } else {
+            config.max_packet_size
+        }
+        let noise = csprng(size + config.noise_bytes_per_packet)
+        noise
+    }
+}
+
+circuit detect_fingerprint(
+    sample_packets: list<bytes>,
+    sample_timings_us: list<u32>,
+) -> FingerprintResult
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    blind full
+    meters [compute_cycles]
+    observe metrics: [fingerprint_checks, vpn_detections]
+    invariant "sufficient_sample" { len(sample_packets) >= 100 }
+    invariant "timings_match" { len(sample_packets) == len(sample_timings_us) }
+{
+    let avg_size = mean(sample_packets.*.len)
+    let size_std = stddev(sample_packets.*.len)
+    let avg_timing = mean(sample_timings_us)
+    let timing_std = stddev(sample_timings_us)
+
+    let profiles = [Netflix, YouTube, ICloud, Spotify, Zoom]
+    let best_match = ""
+    let best_score = 0.0
+    let features_matched = 0
+
+    for p in profiles {
+        let shape = get_traffic_shape(p)
+        let size_dist = abs(avg_size - shape.avg_packet_size) / shape.packet_size_stddev
+        let timing_dist = abs(avg_timing - shape.inter_packet_delay_us) / shape.delay_jitter_us
+        let score = 1.0 / (1.0 + size_dist + timing_dist)
+        if score > best_score {
+            best_match = to_string(p)
+            best_score = score
+            features_matched = if size_dist < 2.0 { 1 } else { 0 }
+                             + if timing_dist < 2.0 { 1 } else { 0 }
+        }
+    }
+
+    let is_vpn = best_score < 0.3
+
+    FingerprintResult {
+        detected_profile: best_match,
+        confidence: best_score,
+        is_vpn_detected: is_vpn,
+        features_matched: features_matched,
+        features_total: 5,
+    }
+}

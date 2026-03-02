@@ -1,0 +1,254 @@
+/// Poly VPN Kill Switch — OS-level firewall enforcement
+///
+/// Prevents cleartext traffic leaks on tunnel failure. Activates
+/// platform firewall rules (WFP on Windows, pf on macOS, nftables
+/// on Linux) to block all non-tunnel traffic. Leak detection runs
+/// continuous probes to verify no DNS or IP leaks escape the tunnel.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Types ────────────────────────────────────────────────────────
+
+type KillswitchState = enum {
+    Inactive,
+    Arming,
+    Active,
+    Failed,
+    Bypassed,
+}
+
+type FirewallRule = struct {
+    rule_id: bytes(16),
+    direction: u8,
+    protocol: u8,
+    src_addr: bytes(16),
+    dst_addr: bytes(16),
+    src_port: u16,
+    dst_port: u16,
+    action: u8,
+    priority: u16,
+    created_at: u64,
+}
+
+type LeakTestResult = struct {
+    test_id: bytes(16),
+    dns_leak: bool,
+    ipv4_leak: bool,
+    ipv6_leak: bool,
+    webrtc_leak: bool,
+    tested_at: u64,
+    exit_ids_verified: list<bytes(16)>,
+    leaked_addresses: list<string>,
+}
+
+type KillswitchConfig = struct {
+    user_id: bytes(16),
+    allow_lan: bool,
+    allow_dns_fallback: bool,
+    block_ipv6: bool,
+    tunnel_interfaces: list<string>,
+}
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit activate_killswitch(
+    config: KillswitchConfig,
+    exit_endpoints: list<bytes(16)>,
+) -> (KillswitchState, list<FirewallRule>)
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [killswitch_activations, rules_created]
+    monitor "killswitch_failures" { killswitch_activations > 0 }
+    invariant "has_exits" { len(exit_endpoints) > 0 }
+    invariant "has_tunnels" { len(config.tunnel_interfaces) > 0 }
+    wasm_abi [now, csprng, firewall_apply]
+    test golden "activate_killswitch_basic" {
+        let cfg = KillswitchConfig {
+            user_id: bytes(16, 0x01), allow_lan: true,
+            allow_dns_fallback: false, block_ipv6: true,
+            tunnel_interfaces: ["utun0"],
+        }
+        let exits = [bytes(16, 0xAA), bytes(16, 0xBB)]
+        let (state, rules) = activate_killswitch(cfg, exits)
+        assert state == Active
+        assert len(rules) >= 3
+    }
+{
+    let ts = now_ns() / 1000000
+    let rules = []
+
+    let block_all = FirewallRule {
+        rule_id: bit_slice(sha3_256(concat("block-all", ts)), 0, 128),
+        direction: 0xFF,
+        protocol: 0xFF,
+        src_addr: zero(16),
+        dst_addr: zero(16),
+        src_port: 0,
+        dst_port: 0,
+        action: 0,
+        priority: 1000,
+        created_at: ts,
+    }
+    rules = append(rules, block_all)
+
+    for exit_ep in exit_endpoints {
+        let allow_exit = FirewallRule {
+            rule_id: bit_slice(sha3_256(concat("allow-exit", exit_ep, ts)), 0, 128),
+            direction: 0xFF,
+            protocol: 0xFF,
+            src_addr: zero(16),
+            dst_addr: exit_ep,
+            src_port: 0,
+            dst_port: 0,
+            action: 1,
+            priority: 100,
+            created_at: ts,
+        }
+        rules = append(rules, allow_exit)
+    }
+
+    if config.allow_lan {
+        let allow_lan = FirewallRule {
+            rule_id: bit_slice(sha3_256(concat("allow-lan", ts)), 0, 128),
+            direction: 0xFF,
+            protocol: 0xFF,
+            src_addr: zero(16),
+            dst_addr: bytes(16, 0xC0A8),
+            src_port: 0,
+            dst_port: 0,
+            action: 1,
+            priority: 50,
+            created_at: ts,
+        }
+        rules = append(rules, allow_lan)
+    }
+
+    if config.block_ipv6 {
+        let block_v6 = FirewallRule {
+            rule_id: bit_slice(sha3_256(concat("block-ipv6", ts)), 0, 128),
+            direction: 0xFF,
+            protocol: 0x29,
+            src_addr: zero(16),
+            dst_addr: zero(16),
+            src_port: 0,
+            dst_port: 0,
+            action: 0,
+            priority: 900,
+            created_at: ts,
+        }
+        rules = append(rules, block_v6)
+    }
+
+    firewall_apply(rules)
+    (Active, rules)
+}
+
+circuit deactivate_killswitch(
+    active_rules: list<FirewallRule>,
+) -> KillswitchState
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [killswitch_deactivations]
+    wasm_abi [firewall_remove]
+{
+    for rule in active_rules {
+        firewall_remove(rule.rule_id)
+    }
+    Inactive
+}
+
+circuit check_for_leaks(
+    user_id: bytes(16),
+    exit_ids: list<bytes(16)>,
+) -> LeakTestResult
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles, bandwidth]
+    observe metrics: [leak_tests, dns_leaks_detected, ip_leaks_detected]
+    monitor "leak_rate" { dns_leaks_detected + ip_leaks_detected == 0 }
+    wasm_abi [now, csprng, net_probe]
+{
+    let ts = now_ns() / 1000000
+    let test_id = bit_slice(sha3_256(concat(user_id, csprng(16), ts)), 0, 128)
+
+    let dns_nonce = blake3(concat("dns-leak-test", csprng(8)))
+    let dns_result = net_probe("dns", dns_nonce)
+    let dns_leak = dns_result.resolver_outside_tunnel
+
+    let ip4_result = net_probe("ipv4", test_id)
+    let ipv4_leak = ip4_result.address_outside_tunnel
+
+    let ip6_result = net_probe("ipv6", test_id)
+    let ipv6_leak = ip6_result.address_outside_tunnel
+
+    let webrtc_result = net_probe("webrtc", test_id)
+    let webrtc_leak = webrtc_result.address_outside_tunnel
+
+    let leaked = []
+    if dns_leak { leaked = append(leaked, dns_result.leaked_addr) }
+    if ipv4_leak { leaked = append(leaked, ip4_result.leaked_addr) }
+    if ipv6_leak { leaked = append(leaked, ip6_result.leaked_addr) }
+    if webrtc_leak { leaked = append(leaked, webrtc_result.leaked_addr) }
+
+    LeakTestResult {
+        test_id: test_id,
+        dns_leak: dns_leak,
+        ipv4_leak: ipv4_leak,
+        ipv6_leak: ipv6_leak,
+        webrtc_leak: webrtc_leak,
+        tested_at: ts,
+        exit_ids_verified: exit_ids,
+        leaked_addresses: leaked,
+    }
+}
+
+circuit enforce_dns_policy(
+    config: KillswitchConfig,
+    tunnel_dns_servers: list<bytes(16)>,
+) -> list<FirewallRule>
+    profile poly_framework_standard
+    lex esn/global/org/polylabs/vpn
+    meters [compute_cycles]
+    observe metrics: [dns_policies_enforced]
+    wasm_abi [now, firewall_apply]
+{
+    let ts = now_ns() / 1000000
+    let rules = []
+
+    let block_dns = FirewallRule {
+        rule_id: bit_slice(sha3_256(concat("block-dns-all", ts)), 0, 128),
+        direction: 0xFF,
+        protocol: 0x11,
+        src_addr: zero(16),
+        dst_addr: zero(16),
+        src_port: 0,
+        dst_port: 53,
+        action: 0,
+        priority: 200,
+        created_at: ts,
+    }
+    rules = append(rules, block_dns)
+
+    for dns_server in tunnel_dns_servers {
+        let allow = FirewallRule {
+            rule_id: bit_slice(sha3_256(concat("allow-dns", dns_server, ts)), 0, 128),
+            direction: 0xFF,
+            protocol: 0x11,
+            src_addr: zero(16),
+            dst_addr: dns_server,
+            src_port: 0,
+            dst_port: 53,
+            action: 1,
+            priority: 150,
+            created_at: ts,
+        }
+        rules = append(rules, allow)
+    }
+
+    firewall_apply(rules)
+    rules
+}

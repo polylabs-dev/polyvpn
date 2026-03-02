@@ -1,0 +1,267 @@
+/// Poly VPN Tunnel Encryption — Per-exit ML-KEM-1024 key exchange + AES-256-GCM
+///
+/// Each exit node gets an independent ML-KEM-1024 session key.
+/// Scatter streams are cryptographically isolated: compromising one
+/// exit's session key reveals nothing about traffic on other exits.
+///
+/// govern lex esn/global/org/polylabs/vpn
+
+import polykit_identity from "../../polykit/circuits/fl/polykit_identity.fl"
+import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+
+// ── Types ────────────────────────────────────────────────────────
+
+type TunnelKey = struct {
+    session_id: bytes(32),
+    exit_id: bytes(16),
+    shared_secret: bytes(32),
+    encapsulated_ct: bytes(1568),
+    created_at: u64,
+    expires_at: u64,
+}
+
+type TunnelSession = struct {
+    session_id: bytes(32),
+    user_id: bytes(16),
+    exit_id: bytes(16),
+    tunnel_key: TunnelKey,
+    packets_sent: u64,
+    packets_recv: u64,
+    bytes_sent: u64,
+    bytes_recv: u64,
+    nonce_counter: u64,
+    established_at: u64,
+}
+
+type HandshakeResult = struct {
+    session: TunnelSession,
+    server_ct: bytes(1568),
+    confirmation_hash: bytes(32),
+    latency_ns: u64,
+}
+
+type EncryptedPacket = struct {
+    session_id: bytes(32),
+    nonce: bytes(12),
+    ciphertext: bytes,
+    tag: bytes(16),
+    sequence: u64,
+}
+
+// ── Circuits ─────────────────────────────────────────────────────
+
+circuit handshake_init(
+    user_id: bytes(16),
+    exit_id: bytes(16),
+    exit_pubkey: bytes(1568),
+    signing_sk: bytes(4896),
+) -> HandshakeResult
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    meters [compute_cycles, bandwidth]
+    observe metrics: [handshakes_initiated, handshake_latency_ns]
+    monitor "handshake_rate" { handshakes_initiated < 50/s }
+    invariant "exit_pk_nonzero" { exit_pubkey != zero(1568) }
+    invariant "user_id_present" { user_id != zero(16) }
+    wasm_abi [now, csprng]
+    test golden "handshake_init_basic" {
+        let uid = bytes(16, 0xAA)
+        let eid = bytes(16, 0xBB)
+        let epk = bytes(1568, 0xCC)
+        let sk = bytes(4896, 0xDD)
+        let result = handshake_init(uid, eid, epk, sk)
+        assert len(result.session.session_id) == 32
+        assert result.session.exit_id == eid
+    }
+    kat_vector "mlkem_encaps_handshake" {
+        pk: bytes(1568, 0xCC)
+        function: mlkem_encaps
+    }
+    kat_vector "aes_gcm_encrypt_tunnel" {
+        key: bytes(32, 0xAA)
+        nonce: bytes(12, 0xBB)
+        plaintext: bytes(128, 0xCC)
+        aad: bytes(32, 0xDD)
+        function: aes_gcm_encrypt
+    }
+    kat_vector "mldsa_sign_handshake" {
+        sk: bytes(4896, 0xDD)
+        message: bytes(64, 0xEE)
+        function: mldsa_sign
+    }
+{
+    let ts = now_ns() / 1000000
+    let kem = mlkem_encaps(exit_pubkey)
+    let shared_secret = blake3(kem)
+    let session_seed = concat(user_id, exit_id, csprng(16), ts)
+    let session_id = sha3_256(session_seed)
+
+    let tunnel_key = TunnelKey {
+        session_id: session_id,
+        exit_id: exit_id,
+        shared_secret: shared_secret,
+        encapsulated_ct: kem,
+        created_at: ts,
+        expires_at: ts + 3600000,
+    }
+
+    let session = TunnelSession {
+        session_id: session_id,
+        user_id: user_id,
+        exit_id: exit_id,
+        tunnel_key: tunnel_key,
+        packets_sent: 0,
+        packets_recv: 0,
+        bytes_sent: 0,
+        bytes_recv: 0,
+        nonce_counter: 0,
+        established_at: ts,
+    }
+
+    let confirmation = sha3_256(concat(session_id, shared_secret))
+    let _sig = mldsa_sign(signing_sk, confirmation)
+
+    HandshakeResult {
+        session: session,
+        server_ct: kem,
+        confirmation_hash: confirmation,
+        latency_ns: (now_ns() / 1000000 - ts) * 1000000,
+    }
+}
+
+circuit handshake_respond(
+    exit_sk: bytes(3168),
+    client_ct: bytes(1568),
+    exit_id: bytes(16),
+    client_user_id: bytes(16),
+) -> TunnelKey
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    meters [compute_cycles]
+    observe metrics: [handshakes_responded]
+    invariant "ct_nonzero" { client_ct != zero(1568) }
+    wasm_abi [now, csprng]
+{
+    let ts = now_ns() / 1000000
+    let shared_secret = mlkem_decaps(exit_sk, client_ct)
+    let session_seed = concat(client_user_id, exit_id, shared_secret, ts)
+    let session_id = sha3_256(session_seed)
+
+    TunnelKey {
+        session_id: session_id,
+        exit_id: exit_id,
+        shared_secret: shared_secret,
+        encapsulated_ct: client_ct,
+        created_at: ts,
+        expires_at: ts + 3600000,
+    }
+}
+
+circuit encrypt_packet(
+    session: TunnelSession,
+    plaintext: bytes,
+) -> (EncryptedPacket, TunnelSession)
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    meters [compute_cycles, bandwidth]
+    observe metrics: [packets_encrypted, encrypt_latency_ns, bytes_encrypted]
+    invariant "nonce_no_overflow" { session.nonce_counter < 0xFFFFFFFFFFFFFFFF }
+    invariant "session_valid" { session.tunnel_key.expires_at > now_ns() / 1000000 }
+    fuzz_target "encrypt_packet_fuzz" {
+        fuzz session: TunnelSession { random, nonce_counter < 0xFFFFFFFFFFFFFFF0 }
+        fuzz plaintext: bytes(random, 1..4096)
+        assert len(output.0.ciphertext) > 0
+        assert output.1.nonce_counter == session.nonce_counter + 1
+    }
+{
+    let nonce = build_nonce(session.nonce_counter)
+    let key = session.tunnel_key.shared_secret
+    let ciphertext = aes_gcm_encrypt(key, nonce, plaintext, session.session_id)
+    let tag = bit_slice(ciphertext, len(ciphertext) * 8 - 128, len(ciphertext) * 8)
+
+    let pkt = EncryptedPacket {
+        session_id: session.session_id,
+        nonce: nonce,
+        ciphertext: ciphertext,
+        tag: tag,
+        sequence: session.nonce_counter,
+    }
+
+    let updated = TunnelSession {
+        ...session,
+        packets_sent: session.packets_sent + 1,
+        bytes_sent: session.bytes_sent + len(plaintext),
+        nonce_counter: session.nonce_counter + 1,
+    }
+
+    (pkt, updated)
+}
+
+circuit decrypt_packet(
+    session: TunnelSession,
+    pkt: EncryptedPacket,
+) -> (bytes, TunnelSession)
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    meters [compute_cycles, bandwidth]
+    observe metrics: [packets_decrypted, decrypt_failures]
+    invariant "sequence_monotonic" { pkt.sequence >= session.packets_recv }
+    invariant "session_match" { pkt.session_id == session.session_id }
+{
+    let key = session.tunnel_key.shared_secret
+    let plaintext = aes_gcm_decrypt(key, pkt.nonce, pkt.ciphertext, session.session_id)
+
+    let updated = TunnelSession {
+        ...session,
+        packets_recv: session.packets_recv + 1,
+        bytes_recv: session.bytes_recv + len(plaintext),
+    }
+
+    (plaintext, updated)
+}
+
+circuit rotate_key(
+    session: TunnelSession,
+    exit_pubkey: bytes(1568),
+    signing_sk: bytes(4896),
+) -> TunnelSession
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn
+    constant_time true
+    meters [compute_cycles]
+    observe metrics: [key_rotations]
+    monitor "rotation_frequency" { key_rotations < 10/min }
+    wasm_abi [now, csprng]
+{
+    let ts = now_ns() / 1000000
+    let kem = mlkem_encaps(exit_pubkey)
+    let new_secret = blake3(concat(session.tunnel_key.shared_secret, kem))
+    let new_session_id = sha3_256(concat(session.session_id, new_secret, ts))
+
+    let new_key = TunnelKey {
+        session_id: new_session_id,
+        exit_id: session.exit_id,
+        shared_secret: new_secret,
+        encapsulated_ct: kem,
+        created_at: ts,
+        expires_at: ts + 3600000,
+    }
+
+    let _sig = mldsa_sign(signing_sk, serialize(new_key))
+
+    polykit_metering::record_usage(session.user_id, "tunnel_key_rotate", DimensionValues {
+        executions: 1, hashes: 2, bandwidth: 0,
+        storage: 0, observables: 1, proofs: 0, circuits: 0, mpc_sessions: 0,
+    })
+
+    TunnelSession {
+        ...session,
+        session_id: new_session_id,
+        tunnel_key: new_key,
+        nonce_counter: 0,
+    }
+}

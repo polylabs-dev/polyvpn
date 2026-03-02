@@ -1,0 +1,44 @@
+[package]
+name = "polyvpn"
+version = "0.1.0"
+description = "PQ scatter-routed VPN with traffic mimicry and DNS-over-HTTPS resolution"
+license = "LicenseRef-PolyQuantum-Commercial"
+repository = "https://github.com/polylabs-dev/polyvpn"
+
+[publisher]
+id = "polylabs-dev"
+name = "Poly Labs"
+signing_key_id = "polylabs-prime-v1"
+
+[escir]
+api_version = "0.9.1"
+min_platform_version = "0.9.0"
+
+[dependencies]
+polykit = ">=0.2.0"
+
+[pricing]
+license_type = "per-invocation"
+share_price = "0.0004"
+private_price = "0.0006"
+
+[telemetry]
+schema_hash = "auto"
+
+[telemetry.metrics]
+tunnel_creates = "counter"
+bandwidth_bytes = "counter"
+dns_resolutions = "counter"
+mimicry_activations = "counter"
+killswitch_activations = "counter"
+scatter_routes = "counter"
+
+[telemetry.privacy]
+aggregate_window = "1h"
+cohort_min_size = 50
+noise_budget = "1.0"
+
+[component.include]
+circuits = ["circuits/fl/*.fl", "circuits/fl/graphs/*.fl"]
+tests = ["test_vectors/*.esz"]
+docs = ["docs/*.md"]

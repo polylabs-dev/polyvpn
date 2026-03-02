@@ -1,0 +1,8 @@
+[test_suite]
+name = "polyvpn golden tests"
+circuit = "polyvpn_circuits"
+version = "0.1.0"
+
+[[vectors]]
+file = "polyvpn.esz"
+tags = ["golden", "happy-path", "crypto", "telemetry-isolation"]
