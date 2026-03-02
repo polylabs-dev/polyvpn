@@ -30,3 +30,12 @@ HKDF context: `poly-vpn-v1`. User identities are completely isolated from all ot
 ## Commit Convention
 
 Commit to the GitHub issue or epic the work was done under.
+
+## Cross-Repo Coordination
+
+This repo is part of the [polylabs-dev](https://github.com/polylabs-dev) organization, coordinated through the **AI Toolkit hub** at `toddrooke/ai-toolkit/`.
+
+For cross-repo context, strategic priorities, and the master work queue:
+- `toddrooke/ai-toolkit/CLAUDE-CONTEXT.md` — org map and priorities
+- `toddrooke/ai-toolkit/scratch/BACKLOG.md` — master backlog
+- `toddrooke/ai-toolkit/repos/polylabs-dev.md` — this org's status summary
