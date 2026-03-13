@@ -1,4 +1,4 @@
-// Poly VPN Metering — Per-product 8D metering for VPN operations (v0.11.0)
+// Poly VPN Metering — Per-product 8D metering for VPN operations (v0.12.0)
 //
 // Maps VPN operations to PolyKit metering dimensions.
 // Isolated under polylabs.vpn.metering lex — no cross-product aggregation.
@@ -8,7 +8,7 @@
 // tunnel             | Bandwidth, Executions, Hashes
 // dns                | Executions, Observables
 // mimicry            | Executions, Circuits
-// scatter            | Bandwidth, Hashes
+// distribute            | Bandwidth, Hashes
 // incognito          | Executions, Circuits, Hashes
 
 import polykit_metering
@@ -20,9 +20,9 @@ circuit meter_tunnel(
     packets: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/metering
-    precision C
-    observe metrics: [tunnel_metering_events]
+    lex global/org/polylabs/vpn/metering
+    @precision C
+    @observe metrics: [tunnel_metering_events]
     monitor "tunnel_metering_rate" { tunnel_metering_events < 5000/s }
     meters [compute_cycles]
     test golden "meter_tunnel_basic" {
@@ -50,9 +50,9 @@ circuit meter_dns(
     blocked: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/metering
-    precision C
-    observe metrics: [dns_metering_events]
+    lex global/org/polylabs/vpn/metering
+    @precision C
+    @observe metrics: [dns_metering_events]
     meters [compute_cycles]
 {
     polykit_metering::record_usage(user_id, "vpn_dns", DimensionValues {
@@ -74,9 +74,9 @@ circuit meter_mimicry(
     profiles_applied: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/metering
-    precision C
-    observe metrics: [mimicry_metering_events]
+    lex global/org/polylabs/vpn/metering
+    @precision C
+    @observe metrics: [mimicry_metering_events]
     meters [compute_cycles]
 {
     polykit_metering::record_usage(user_id, "vpn_mimicry", DimensionValues {
@@ -91,16 +91,16 @@ circuit meter_mimicry(
     })
 }
 
-// --- Meter scatter routing fragment operations ---
+// --- Meter distribute routing fragment operations ---
 circuit meter_scatter(
     user_id: bytes(16),
     bytes_scattered: u64,
     fragments: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/metering
-    precision C
-    observe metrics: [scatter_metering_events]
+    lex global/org/polylabs/vpn/metering
+    @precision C
+    @observe metrics: [scatter_metering_events]
     meters [compute_cycles]
 {
     polykit_metering::record_usage(user_id, "vpn_scatter", DimensionValues {
@@ -122,9 +122,9 @@ circuit meter_incognito(
     profile_switches: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/metering
-    precision C
-    observe metrics: [incognito_metering_events]
+    lex global/org/polylabs/vpn/metering
+    @precision C
+    @observe metrics: [incognito_metering_events]
     meters [compute_cycles]
 {
     polykit_metering::record_usage(user_id, "vpn_incognito", DimensionValues {
@@ -146,9 +146,9 @@ circuit check_vpn_limits(
     tier_limits: TierLimits,
 ) -> list<MeteringDimension>
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/metering
-    precision C
-    observe metrics: [limit_checks, limit_violations]
+    lex global/org/polylabs/vpn/metering
+    @precision C
+    @observe metrics: [limit_checks, limit_violations]
     meters [compute_cycles]
 {
     let current = polykit_metering::get_usage_summary(user_id)

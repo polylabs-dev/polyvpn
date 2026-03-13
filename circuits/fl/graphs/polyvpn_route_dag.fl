@@ -1,6 +1,6 @@
-// Poly VPN Route DAG — Stratum DAG storage + Cortex AI governance (v0.11.0)
+// Poly VPN Route DAG — Stratum DAG storage + Cortex AI governance (v0.12.0)
 //
-// Multi-hop scatter routing modeled as a DAG. Each route is a directed
+// Multi-hop distribute routing modeled as a DAG. Each route is a directed
 // acyclic path through the exit mesh. Acyclicity enforced to prevent
 // routing loops. ML-DSA-87 signed; merkle-CSR backed; PoVC witnessed.
 
@@ -27,7 +27,7 @@ data RouteNode : vpn v1 {
     updated_at: u64,
 }
     store dag
-    govern lex esn/global/org/polylabs/vpn/route
+    govern lex global/org/polylabs/vpn/route
     cortex {
         redact [hop_key]
         obfuscate [exit_id]
@@ -60,11 +60,11 @@ dag tunnel_route {
         cold @nvme,
     }
 
-    attest povc {
+    attest attested {
         witness threshold(2, 3)
     }
 
-    observe tunnel_route: [hop_latency, encryption_overhead, hop_status] threshold: {
+    @observe tunnel_route: [hop_latency, encryption_overhead, hop_status] threshold: {
         anomaly_score 0.85
         baseline_window 60
     }
@@ -81,26 +81,26 @@ series route_series: tunnel_route
 stream route_mutations: event<RouteNode>
     | throttle 500/s burst 1000
     retention 90d
-    consumers [governance, audit, streamsight, vpn_ops]
+    consumers [governance, audit, observe, vpn_ops]
 
 stream route_health_events: event<RouteNode>
     | throttle 1000/s burst 2000
     retention 30d
-    consumers [streamsight, console, vpn_ops]
+    consumers [observe, console, vpn_ops]
 
-// --- Build a multi-hop scatter route through the exit mesh ---
+// --- Build a multi-hop distribute route through the exit mesh ---
 circuit build_route(
     user_id: bytes(16),
     exit_ids: list<string>,
     exit_pubkeys: list<bytes(1568)>,
     signing_sk: bytes(4896),
 ) -> list<RouteNode>
-    lex esn/global/org/polylabs/vpn/route
-    status production
-    precision C
-    povc true
+    lex global/org/polylabs/vpn/route
+    @status production
+    @precision C
+    @attested true
     constant_time true
-    observe metrics: [routes_built, route_build_latency_ns, hops_created]
+    @observe metrics: [routes_built, route_build_latency_ns, hops_created]
     monitor "route_build_rate" { routes_built < 50/s }
     invariant "min_hops" { len(exit_ids) >= 2 }
     invariant "ids_keys_match" { len(exit_ids) == len(exit_pubkeys) }
@@ -117,16 +117,16 @@ circuit build_route(
         assert route[0].hop_position == 0
         assert route[2].hop_position == 2
     }
-    kat_vector "mlkem_encaps_route" {
+    @golden_test "mlkem_encaps_route" {
         pk: bytes(1568, 0xC1)
         function: mlkem_encaps
     }
-    kat_vector "blake3_hop_key" {
+    @golden_test "blake3_hop_key" {
         input: bytes(64, 0xAA)
         function: blake3
         expected: blake3(bytes(64, 0xAA))
     }
-    kat_vector "mldsa_sign_route" {
+    @golden_test "mldsa_sign_route" {
         sk: bytes(4896, 0xBB)
         message: bytes(128, 0xCC)
         function: mldsa_sign
@@ -195,11 +195,11 @@ circuit teardown_route(
     route_nodes: list<string>,
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn/route
-    status production
-    precision C
-    povc true
-    observe metrics: [routes_torn_down]
+    lex global/org/polylabs/vpn/route
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [routes_torn_down]
     invariant "has_nodes" { len(route_nodes) > 0 }
     meters [compute_cycles]
     wasm_abi [now]
@@ -231,12 +231,12 @@ circuit reroute_hop(
     new_exit_pubkey: bytes(1568),
     signing_sk: bytes(4896),
 ) -> RouteNode
-    lex esn/global/org/polylabs/vpn/route
-    status production
-    precision C
-    povc true
+    lex global/org/polylabs/vpn/route
+    @status production
+    @precision C
+    @attested true
     constant_time true
-    observe metrics: [hops_rerouted, reroute_latency_ns]
+    @observe metrics: [hops_rerouted, reroute_latency_ns]
     invariant "different_exit" { old_exit_id != new_exit_id }
     meters [compute_cycles, memory_bytes]
     wasm_abi [now, csprng]
@@ -277,11 +277,11 @@ circuit reroute_hop(
 circuit prove_route_integrity(
     route_nodes: list<string>,
 ) -> bytes(32)
-    lex esn/global/org/polylabs/vpn/route
-    status production
-    precision C
-    povc true
-    observe metrics: [integrity_proofs, proof_latency_ns]
+    lex global/org/polylabs/vpn/route
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [integrity_proofs, proof_latency_ns]
     invariant "has_nodes" { len(route_nodes) > 0 }
     meters [compute_cycles]
 {

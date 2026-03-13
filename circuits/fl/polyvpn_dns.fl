@@ -1,6 +1,6 @@
-// Poly VPN DNS Protection — DNS-over-eStream with ad/tracker blocking (v0.11.0)
+// Poly VPN DNS Protection — DNS-over-eStream with ad/tracker blocking (v0.12.0)
 //
-// All DNS queries are PQ-encrypted and scatter-routed through the
+// All DNS queries are PQ-encrypted and distribute-routed through the
 // tunnel. No single DNS resolver sees all queries. Blocklists for
 // ads, trackers, and malware are enforced client-side before queries
 // leave the device.
@@ -27,7 +27,7 @@ data DnsQuery : vpn v1 {
     scatter_exit_id: bytes(16),
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/dns
+    govern lex global/org/polylabs/vpn/dns
     cortex {
         obfuscate [user_id, scatter_exit_id]
         infer on_write
@@ -51,7 +51,7 @@ data DnsResponse : vpn v1 {
     block_reason: string,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/dns
+    govern lex global/org/polylabs/vpn/dns
     cortex {
         obfuscate [resolved_via]
         infer on_write
@@ -81,7 +81,7 @@ data DnsCache : vpn v1 {
     expires_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/dns
+    govern lex global/org/polylabs/vpn/dns
     cortex {
         infer on_write
     }
@@ -89,14 +89,14 @@ data DnsCache : vpn v1 {
 stream dns_query_events: event<DnsQuery>
     | throttle 5000/s burst 10000
     retention 90d
-    consumers [streamsight, audit_trail]
+    consumers [observe, audit_trail]
 
 stream dns_block_events: event<DnsResponse>
     | throttle 1000/s burst 2000
     retention 365d
-    consumers [streamsight, governance]
+    consumers [observe, governance]
 
-// --- Resolve DNS query through PQ-encrypted scatter tunnel ---
+// --- Resolve DNS query through PQ-encrypted distribute tunnel ---
 circuit resolve_dns(
     user_id: bytes(16),
     domain: string,
@@ -105,9 +105,9 @@ circuit resolve_dns(
     tunnel_key: bytes(32),
 ) -> DnsResponse
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/dns
-    precision C
-    observe metrics: [dns_queries, dns_latency_ms, cache_hits, blocked_queries]
+    lex global/org/polylabs/vpn/dns
+    @precision C
+    @observe metrics: [dns_queries, dns_latency_ms, cache_hits, blocked_queries]
     monitor "dns_latency" { dns_latency_ms < 100 }
     invariant "domain_nonempty" { len(domain) > 0 }
     meters [compute_cycles, bandwidth]
@@ -119,7 +119,7 @@ circuit resolve_dns(
         let resp = resolve_dns(uid, "example.com", A, eid, tk)
         assert len(resp.query_id) == 16
     }
-    kat_vector "sha3_256_domain_hash" {
+    @golden_test "sha3_256_domain_hash" {
         input: "example.com"
         function: sha3_256
         expected: sha3_256("example.com")
@@ -190,9 +190,9 @@ circuit check_blocklist(
     domain: string,
 ) -> (bool, string)
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/dns
-    precision C
-    observe metrics: [blocklist_lookups, blocklist_hits]
+    lex global/org/polylabs/vpn/dns
+    @precision C
+    @observe metrics: [blocklist_lookups, blocklist_hits]
     invariant "domain_present" { len(domain) > 0 }
     meters [compute_cycles]
 {
@@ -218,9 +218,9 @@ circuit cache_response(
     ttl_override: u32,
 ) -> DnsCache
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/dns
-    precision C
-    observe metrics: [cache_stores, cache_evictions]
+    lex global/org/polylabs/vpn/dns
+    @precision C
+    @observe metrics: [cache_stores, cache_evictions]
     meters [compute_cycles, storage]
     wasm_abi [now, eslite_insert]
 {
@@ -241,20 +241,20 @@ circuit cache_response(
     entry
 }
 
-// --- Encrypt a DNS query for scatter transport ---
+// --- Encrypt a DNS query for distribute transport ---
 circuit encrypt_query(
     query: DnsQuery,
     tunnel_key: bytes(32),
 ) -> bytes
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/dns
-    precision C
+    lex global/org/polylabs/vpn/dns
+    @precision C
     constant_time true
-    observe metrics: [queries_encrypted]
+    @observe metrics: [queries_encrypted]
     invariant "key_nonzero" { tunnel_key != zero(32) }
     meters [compute_cycles]
     wasm_abi [csprng]
-    kat_vector "aes_gcm_encrypt_dns_query" {
+    @golden_test "aes_gcm_encrypt_dns_query" {
         key: bytes(32, 0xAA)
         nonce: bytes(12, 0xBB)
         plaintext: bytes(64, 0xCC)

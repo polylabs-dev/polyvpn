@@ -1,4 +1,4 @@
-// Poly VPN Tunnel Encryption — Per-exit ML-KEM-1024 key exchange + AES-256-GCM (v0.11.0)
+// Poly VPN Tunnel Encryption — Per-exit ML-KEM-1024 key exchange + AES-256-GCM (v0.12.0)
 //
 // Each exit node gets an independent ML-KEM-1024 session key.
 // Scatter streams are cryptographically isolated: compromising one
@@ -16,7 +16,7 @@ data TunnelKey : vpn v1 {
     expires_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/tunnel
+    govern lex global/org/polylabs/vpn/tunnel
     cortex {
         redact [shared_secret]
         obfuscate [exit_id]
@@ -37,7 +37,7 @@ data TunnelSession : vpn v1 {
     established_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/tunnel
+    govern lex global/org/polylabs/vpn/tunnel
     cortex {
         redact [tunnel_key]
         obfuscate [user_id, exit_id]
@@ -63,7 +63,7 @@ type EncryptedPacket = struct {
 stream tunnel_session_events: event<TunnelSession>
     | throttle 500/s burst 1000
     retention 90d
-    consumers [streamsight, audit_trail]
+    consumers [observe, audit_trail]
 
 // --- Initiate ML-KEM-1024 handshake with an exit node ---
 circuit handshake_init(
@@ -73,10 +73,10 @@ circuit handshake_init(
     signing_sk: bytes(4896),
 ) -> HandshakeResult
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/tunnel
-    precision C
+    lex global/org/polylabs/vpn/tunnel
+    @precision C
     constant_time true
-    observe metrics: [handshakes_initiated, handshake_latency_ns]
+    @observe metrics: [handshakes_initiated, handshake_latency_ns]
     monitor "handshake_rate" { handshakes_initiated < 50/s }
     invariant "exit_pk_nonzero" { exit_pubkey != zero(1568) }
     invariant "user_id_present" { user_id != zero(16) }
@@ -91,18 +91,18 @@ circuit handshake_init(
         assert len(result.session.session_id) == 32
         assert result.session.exit_id == eid
     }
-    kat_vector "mlkem_encaps_handshake" {
+    @golden_test "mlkem_encaps_handshake" {
         pk: bytes(1568, 0xCC)
         function: mlkem_encaps
     }
-    kat_vector "aes_gcm_encrypt_tunnel" {
+    @golden_test "aes_gcm_encrypt_tunnel" {
         key: bytes(32, 0xAA)
         nonce: bytes(12, 0xBB)
         plaintext: bytes(128, 0xCC)
         aad: bytes(32, 0xDD)
         function: aes_gcm_encrypt
     }
-    kat_vector "mldsa_sign_handshake" {
+    @golden_test "mldsa_sign_handshake" {
         sk: bytes(4896, 0xDD)
         message: bytes(64, 0xEE)
         function: mldsa_sign
@@ -157,10 +157,10 @@ circuit handshake_respond(
     client_user_id: bytes(16),
 ) -> TunnelKey
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/tunnel
-    precision C
+    lex global/org/polylabs/vpn/tunnel
+    @precision C
     constant_time true
-    observe metrics: [handshakes_responded]
+    @observe metrics: [handshakes_responded]
     invariant "ct_nonzero" { client_ct != zero(1568) }
     meters [compute_cycles]
     wasm_abi [now, csprng]
@@ -186,10 +186,10 @@ circuit encrypt_packet(
     plaintext: bytes,
 ) -> (EncryptedPacket, TunnelSession)
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/tunnel
-    precision C
+    lex global/org/polylabs/vpn/tunnel
+    @precision C
     constant_time true
-    observe metrics: [packets_encrypted, encrypt_latency_ns, bytes_encrypted]
+    @observe metrics: [packets_encrypted, encrypt_latency_ns, bytes_encrypted]
     invariant "nonce_no_overflow" { session.nonce_counter < 0xFFFFFFFFFFFFFFFF }
     invariant "session_valid" { session.tunnel_key.expires_at > now_ns() / 1000000 }
     meters [compute_cycles, bandwidth]
@@ -229,10 +229,10 @@ circuit decrypt_packet(
     pkt: EncryptedPacket,
 ) -> (bytes, TunnelSession)
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/tunnel
-    precision C
+    lex global/org/polylabs/vpn/tunnel
+    @precision C
     constant_time true
-    observe metrics: [packets_decrypted, decrypt_failures]
+    @observe metrics: [packets_decrypted, decrypt_failures]
     invariant "sequence_monotonic" { pkt.sequence >= session.packets_recv }
     invariant "session_match" { pkt.session_id == session.session_id }
     meters [compute_cycles, bandwidth]
@@ -256,10 +256,10 @@ circuit rotate_key(
     signing_sk: bytes(4896),
 ) -> TunnelSession
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/tunnel
-    precision C
+    lex global/org/polylabs/vpn/tunnel
+    @precision C
     constant_time true
-    observe metrics: [key_rotations]
+    @observe metrics: [key_rotations]
     monitor "rotation_frequency" { key_rotations < 10/min }
     meters [compute_cycles]
     wasm_abi [now, csprng]

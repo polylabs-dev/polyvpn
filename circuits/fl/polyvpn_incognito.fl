@@ -1,4 +1,4 @@
-// Poly VPN Incognito Mode — Traffic mimicry session lifecycle (v0.11.0)
+// Poly VPN Incognito Mode — Traffic mimicry session lifecycle (v0.12.0)
 //
 // CLASSIFICATION: TRADE SECRET — MOST SENSITIVE CIRCUIT IN THE SUITE
 // Delivered as compiled WASM post-install. Source never leaves build infra.
@@ -31,7 +31,7 @@ data IncognitoSession : vpn v1 {
     last_profile_switch_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/incognito
+    govern lex global/org/polylabs/vpn/incognito
     cortex {
         redact [tunnel_session_id]
         obfuscate [user_id, session_id]
@@ -49,7 +49,7 @@ data IncognitoHealthCheck : vpn v1 {
     checked_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/incognito
+    govern lex global/org/polylabs/vpn/incognito
     cortex {
         obfuscate [session_id]
         infer on_write
@@ -66,12 +66,12 @@ type ProfileTransition = struct {
 stream incognito_events: event<IncognitoSession>
     | throttle 100/s burst 200
     retention 365d
-    consumers [streamsight, audit_trail]
+    consumers [observe, audit_trail]
 
 stream incognito_health_events: event<IncognitoHealthCheck>
     | throttle 500/s burst 1000
     retention 90d
-    consumers [streamsight, governance, alerting]
+    consumers [observe, governance, alerting]
 
 // --- Activate incognito mode with a mimicry profile ---
 circuit activate_incognito(
@@ -81,12 +81,12 @@ circuit activate_incognito(
     cover_bandwidth_mbps: u32,
 ) -> IncognitoSession
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/incognito
-    precision C
+    lex global/org/polylabs/vpn/incognito
+    @precision C
     constant_time true
     blind full
     property safety "no_traffic_signature_leak" { no_distinguishable_pattern(profile) }
-    observe metrics: [incognito_activations, profile_type]
+    @observe metrics: [incognito_activations, profile_type]
     monitor "activation_rate" { incognito_activations < 100/s }
     invariant "tunnel_active" { tunnel_session_id != zero(32) }
     invariant "valid_cover_bw" { cover_bandwidth_mbps > 0 }
@@ -140,12 +140,12 @@ circuit switch_profile(
     ramp_duration_ms: u32,
 ) -> (IncognitoSession, ProfileTransition)
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/incognito
-    precision C
+    lex global/org/polylabs/vpn/incognito
+    @precision C
     constant_time true
     blind full
     property safety "no_traffic_signature_leak" { no_distinguishable_pattern(new_profile) }
-    observe metrics: [profile_switches, switch_latency_ms]
+    @observe metrics: [profile_switches, switch_latency_ms]
     invariant "different_profile" { session.active_profile != new_profile }
     invariant "session_active" { session.started_at > 0 }
     meters [compute_cycles]
@@ -184,12 +184,12 @@ circuit shape_incognito_packet(
     sequence: u64,
 ) -> (ShapedPacket, IncognitoSession)
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/incognito
-    precision C
+    lex global/org/polylabs/vpn/incognito
+    @precision C
     constant_time true
     blind full
     property safety "no_traffic_signature_leak" { no_distinguishable_pattern(session.active_profile) }
-    observe metrics: [incognito_packets_shaped, shaping_latency_ns]
+    @observe metrics: [incognito_packets_shaped, shaping_latency_ns]
     invariant "packet_nonempty" { len(packet) > 0 }
     meters [compute_cycles, bandwidth]
     wasm_abi [csprng]
@@ -219,12 +219,12 @@ circuit verify_incognito_health(
     sample_timings_us: list<u32>,
 ) -> IncognitoHealthCheck
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/incognito
-    precision C
+    lex global/org/polylabs/vpn/incognito
+    @precision C
     constant_time true
     blind full
     property safety "no_traffic_signature_leak" { no_distinguishable_pattern(session.active_profile) }
-    observe metrics: [incognito_health_checks, health_failures]
+    @observe metrics: [incognito_health_checks, health_failures]
     monitor "incognito_health_failure_rate" { health_failures == 0 }
     invariant "sufficient_sample" { len(sample_packets) >= 100 }
     meters [compute_cycles]
@@ -259,11 +259,11 @@ circuit deactivate_incognito(
     session: IncognitoSession,
 ) -> bool
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn/incognito
-    precision C
+    lex global/org/polylabs/vpn/incognito
+    @precision C
     constant_time true
     blind full
-    observe metrics: [incognito_deactivations]
+    @observe metrics: [incognito_deactivations]
     meters [compute_cycles]
     wasm_abi [now, eslite_delete]
 {

@@ -1,4 +1,4 @@
-// Poly VPN RBAC — Role-based access control for VPN operations (v0.11.0)
+// Poly VPN RBAC — Role-based access control for VPN operations (v0.12.0)
 //
 // Fine-grained RBAC graph governing who can manage exits, routes,
 // incognito profiles, and org-level VPN policies. Inherits from the
@@ -11,7 +11,7 @@
 //   bit 3  — vpn.exit.register     (register exit nodes)
 //   bit 4  — vpn.exit.blacklist    (blacklist exit nodes)
 //   bit 5  — vpn.exit.attest       (perform hardware attestation)
-//   bit 6  — vpn.route.build       (build scatter routes)
+//   bit 6  — vpn.route.build       (build distribute routes)
 //   bit 7  — vpn.route.reroute     (reroute active hops)
 //   bit 8  — vpn.policy.manage     (manage org VPN policies)
 //   bit 9  — vpn.audit.read        (read audit trails)
@@ -31,7 +31,7 @@ data VpnRole : vpn v1 {
     created_by: bytes(32),
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/rbac
+    govern lex global/org/polylabs/vpn/rbac
     cortex {
         infer on_write
         on_anomaly alert "vpn-team"
@@ -48,7 +48,7 @@ data VpnRoleAssignment : vpn v1 {
     expires_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/rbac
+    govern lex global/org/polylabs/vpn/rbac
     cortex {
         obfuscate [principal]
         infer on_write
@@ -98,7 +98,7 @@ graph vpn_rbac {
         confidence 0.90
     }
 
-    observe vpn_rbac: [permissions, principal_map, audit_trail] threshold: {
+    @observe vpn_rbac: [permissions, principal_map, audit_trail] threshold: {
         anomaly_score 0.95
         baseline_window 300
     }
@@ -112,12 +112,12 @@ series vpn_rbac_series: vpn_rbac
 stream vpn_rbac_events: event<VpnRoleAssignment>
     | throttle 200/s burst 500
     retention 7y
-    consumers [governance, audit, compliance, streamsight]
+    consumers [governance, audit, compliance, observe]
 
 stream vpn_permission_changes: event<VpnRole>
     | throttle 100/s burst 200
     retention 7y
-    consumers [audit, streamsight, alerting]
+    consumers [audit, observe, alerting]
 
 // --- Create a new VPN role definition ---
 circuit create_vpn_role(
@@ -128,11 +128,11 @@ circuit create_vpn_role(
     creator_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> VpnRole
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision C
-    povc true
-    observe metrics: [roles_created]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [roles_created]
     invariant "name_valid" { len(name) > 0 }
     invariant "permissions_nonzero" { permission_bitmask > 0 }
     meters [compute_cycles, memory_bytes]
@@ -184,11 +184,11 @@ circuit assign_vpn_role(
     grantor_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> VpnRoleAssignment
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision C
-    povc true
-    observe metrics: [roles_assigned, scope_type_distribution]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [roles_assigned, scope_type_distribution]
     invariant "principal_nonzero" { principal != zero(32) }
     invariant "role_exists" { eslite_exists("vpn_roles", role_id) }
     meters [compute_cycles, memory_bytes]
@@ -225,11 +225,11 @@ circuit revoke_vpn_role(
     revoker_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision C
-    povc true
-    observe metrics: [roles_revoked]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [roles_revoked]
     invariant "assignment_exists" { eslite_exists("vpn_role_assignments", assignment_id) }
     meters [compute_cycles]
     wasm_abi [eslite_delete, eslite_query, now]
@@ -253,10 +253,10 @@ circuit check_vpn_permission(
     scope_id: bytes(32),
     permission_bit: u64,
 ) -> bool
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision D
-    observe metrics: [permission_checks, permission_granted, permission_denied]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision D
+    @observe metrics: [permission_checks, permission_granted, permission_denied]
     meters [compute_cycles]
 {
     let effective = resolve_vpn_permissions(principal, scope_id)
@@ -268,10 +268,10 @@ circuit resolve_vpn_permissions(
     principal: bytes(32),
     scope_id: bytes(32),
 ) -> u64
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision C
-    observe metrics: [permission_resolutions, inheritance_depth]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision C
+    @observe metrics: [permission_resolutions, inheritance_depth]
     meters [compute_cycles]
 {
     let assignments = eslite_query_index("vpn_role_assignments", "principal", principal)
@@ -295,9 +295,9 @@ circuit resolve_vpn_permissions(
 
 // --- Expand bitmask to human-readable permission set ---
 circuit expand_permissions(bitmask: u64) -> VpnPermissionSet
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision D
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision D
     meters [compute_cycles]
 {
     VpnPermissionSet {
@@ -317,11 +317,11 @@ circuit expand_permissions(bitmask: u64) -> VpnPermissionSet
 
 // --- Expire stale role assignments ---
 circuit expire_stale_assignments(current_time: u64) -> u32
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision C
-    povc true
-    observe metrics: [expired_assignments]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [expired_assignments]
     meters [compute_cycles]
     wasm_abi [eslite_query, eslite_delete]
 {
@@ -344,10 +344,10 @@ circuit expire_stale_assignments(current_time: u64) -> u32
 circuit audit_principal_vpn(
     principal: bytes(32),
 ) -> list<VpnRoleAssignment>
-    lex esn/global/org/polylabs/vpn/rbac
-    status production
-    precision B
-    observe metrics: [audit_queries]
+    lex global/org/polylabs/vpn/rbac
+    @status production
+    @precision B
+    @observe metrics: [audit_queries]
     meters [compute_cycles]
 {
     eslite_query_index("vpn_role_assignments", "principal", principal)

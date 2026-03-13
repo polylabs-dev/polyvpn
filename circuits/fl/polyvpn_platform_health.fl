@@ -1,4 +1,4 @@
-// Poly VPN Platform Health — Blind relay pattern health monitoring (v0.11.0)
+// Poly VPN Platform Health — Blind relay pattern health monitoring (v0.12.0)
 //
 // Aggregates tunnel-operation metrics through blinded, cohort-enforced telemetry.
 // Stratum: kv store + lex governance under esn/global/org/polylabs/vpn.
@@ -29,7 +29,7 @@ data PlatformMetrics : vpn v1 {
     collected_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn
+    govern lex global/org/polylabs/vpn
     cortex {
         obfuscate [blinded_user_id, anomaly_score, tunnel_latency_avg_ms]
         infer on_write
@@ -45,13 +45,13 @@ type HealthStatus = enum {
 stream vpn_health_events: event<PlatformMetrics>
     | throttle 500/s burst 1000
     retention 365d
-    consumers [streamsight, audit_trail]
+    consumers [observe, audit_trail]
     classify blinded_user_id: METADATA, cohort_size: METADATA
 
 stream vpn_anomaly_events: event<PlatformMetrics>
     | throttle 100/s burst 200
     retention forever
-    consumers [streamsight, governance, alerting]
+    consumers [observe, governance, alerting]
 
 series vpn_health_series: vpn_health_events
     merkle_chain true
@@ -71,21 +71,21 @@ circuit vpn_platform_health(
     jurisdiction_diversity: u64,
 ) -> PlatformMetrics
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn {
+    lex global/org/polylabs/vpn {
         governance hierarchical
         audit_trail true
         sub_lex tunnel fan_in
     }
-    precision C
-    streamsight true
-    povc true
-    observe metrics: [platform_queries, active_tunnels, bandwidth_bytes_total, tunnel_latency_avg_ms, mimicry_active, jurisdiction_diversity]
+    @precision C
+    @observe true
+    @attested true
+    @observe metrics: [platform_queries, active_tunnels, bandwidth_bytes_total, tunnel_latency_avg_ms, mimicry_active, jurisdiction_diversity]
     invariant "no_content_at_platform" { content_visible == false }
     invariant "traffic_mimicry_active" { mimicry_coverage >= 0.95 }
     property safety "session_isolation" { no_cross_session_data }
     property liveness "eventually_healthy" { eventually(all_healthy == true) }
     monitor "tunnel_latency" { tunnel_latency_avg_ms < 200 }
-    esz_emit "verify/vpn_health.esz"
+    @serialize "verify/vpn_health.esz"
     li_feed full_escir true, optimized_ir true, optimization_metadata true
     meters [compute_cycles]
     fuzz_target
@@ -196,13 +196,13 @@ circuit vpn_anomaly_check(
     window_ms: u64,
 ) -> (HealthStatus, f64, string)
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn {
+    lex global/org/polylabs/vpn {
         governance hierarchical
         audit_trail true
     }
-    precision C
-    streamsight true
-    observe metrics: [anomaly_checks, anomaly_detections]
+    @precision C
+    @observe true
+    @observe metrics: [anomaly_checks, anomaly_detections]
     monitor "anomaly_rate" { anomaly_detections < 50/hr }
     meters [compute_cycles]
     cortex {

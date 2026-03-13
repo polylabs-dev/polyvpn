@@ -1,9 +1,9 @@
-// Poly VPN Exit Graph — Stratum graph storage + Cortex AI governance (v0.11.0)
+// Poly VPN Exit Graph — Stratum graph storage + Cortex AI governance (v0.12.0)
 //
 // Models the exit node network as a typed graph with real-time overlays.
 // Cortex redacts endpoint addresses and private key hashes; obfuscates
 // jurisdiction and operator identity. The ai_feed drives optimal
-// multi-exit scatter route selection.
+// multi-exit distribute route selection.
 
 import polykit_identity
 import polykit_metering
@@ -37,7 +37,7 @@ data ExitNode : vpn v1 {
     updated_at: u64,
 }
     store graph
-    govern lex esn/global/org/polylabs/vpn/exit
+    govern lex global/org/polylabs/vpn/exit
     cortex {
         redact [endpoint_address, private_key_hash]
         obfuscate [jurisdiction, operator_id]
@@ -53,7 +53,7 @@ data PeerNode : vpn v1 {
     bandwidth_mbps: u32,
 }
     store graph
-    govern lex esn/global/org/polylabs/vpn/exit
+    govern lex global/org/polylabs/vpn/exit
     cortex {
         obfuscate [peer_id]
         infer on_read
@@ -100,7 +100,7 @@ graph vpn_exit_mesh {
         confidence 0.85
     }
 
-    observe vpn_exit_mesh: [latency_ns, load_pct, bandwidth_mbps, blacklist_status] threshold: {
+    @observe vpn_exit_mesh: [latency_ns, load_pct, bandwidth_mbps, blacklist_status] threshold: {
         anomaly_score 0.80
         baseline_window 30
     }
@@ -114,12 +114,12 @@ series exit_series: vpn_exit_mesh
 stream exit_graph_mutations: event<ExitNode>
     | throttle 200/s burst 500
     retention 365d
-    consumers [governance, audit, streamsight, vpn_ops]
+    consumers [governance, audit, observe, vpn_ops]
 
 stream exit_health_events: event<ExitNode>
     | throttle 1000/s burst 2000
     retention 90d
-    consumers [streamsight, console, vpn_ops]
+    consumers [observe, console, vpn_ops]
 
 // --- Register a new exit node in the mesh ---
 circuit register_exit(
@@ -132,12 +132,12 @@ circuit register_exit(
     operator_type: u8,
     signing_sk: bytes(4896),
 ) -> ExitNode
-    lex esn/global/org/polylabs/vpn/exit
-    status production
-    precision C
-    povc true
+    lex global/org/polylabs/vpn/exit
+    @status production
+    @precision C
+    @attested true
     constant_time true
-    observe metrics: [exits_registered, exit_register_latency_ns]
+    @observe metrics: [exits_registered, exit_register_latency_ns]
     monitor "exit_registration_rate" { exits_registered < 20/s }
     invariant "valid_region" { len(region) > 0 }
     invariant "valid_capacity" { capacity_mbps > 0 }
@@ -153,12 +153,12 @@ circuit register_exit(
         assert exit.region == "us-east"
         assert exit.operator_type == 0
     }
-    kat_vector "sha3_256_exit_seed" {
+    @golden_test "sha3_256_exit_seed" {
         input: bytes(64, 0xAA)
         function: sha3_256
         expected: sha3_256(bytes(64, 0xAA))
     }
-    kat_vector "mldsa_sign_exit" {
+    @golden_test "mldsa_sign_exit" {
         sk: bytes(4896, 0xBB)
         message: bytes(128, 0xCC)
         function: mldsa_sign
@@ -211,10 +211,10 @@ circuit select_exits(
     avoid_jurisdictions: list<string>,
     min_bandwidth_mbps: u32,
 ) -> list<ExitNode>
-    lex esn/global/org/polylabs/vpn/exit
-    status production
-    precision B
-    observe metrics: [exit_selections, selection_latency_ns, ai_suggestions_used]
+    lex global/org/polylabs/vpn/exit
+    @status production
+    @precision B
+    @observe metrics: [exit_selections, selection_latency_ns, ai_suggestions_used]
     invariant "min_exits" { num_exits >= 2 }
     meters [compute_cycles]
 {
@@ -257,10 +257,10 @@ circuit rotate_exits(
     preferred_regions: list<string>,
     avoid_jurisdictions: list<string>,
 ) -> list<ExitNode>
-    lex esn/global/org/polylabs/vpn/exit
-    status production
-    precision B
-    observe metrics: [exit_rotations]
+    lex global/org/polylabs/vpn/exit
+    @status production
+    @precision B
+    @observe metrics: [exit_rotations]
     invariant "valid_rotation" { rotation_count <= len(current_exits) }
     meters [compute_cycles]
 {
@@ -294,10 +294,10 @@ circuit update_exit_health(
     load_pct: u8,
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn/exit
-    status production
-    precision B
-    observe metrics: [health_updates, degraded_exits]
+    lex global/org/polylabs/vpn/exit
+    @status production
+    @precision B
+    @observe metrics: [health_updates, degraded_exits]
     monitor "exit_health_lag" { health_updates > 0 }
     meters [compute_cycles]
     wasm_abi [now]
@@ -334,11 +334,11 @@ circuit blacklist_exit(
     reason: string,
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn/exit
-    status production
-    precision C
-    povc true
-    observe metrics: [exits_blacklisted]
+    lex global/org/polylabs/vpn/exit
+    @status production
+    @precision C
+    @attested true
+    @observe metrics: [exits_blacklisted]
     meters [compute_cycles]
     wasm_abi [now]
 {
@@ -364,12 +364,12 @@ circuit attest_exit(
     operator_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> string
-    lex esn/global/org/polylabs/vpn/exit
-    status production
-    precision C
-    povc true
+    lex global/org/polylabs/vpn/exit
+    @status production
+    @precision C
+    @attested true
     constant_time true
-    observe metrics: [attestations_performed, attestation_failures]
+    @observe metrics: [attestations_performed, attestation_failures]
     invariant "attestation_nonempty" { len(hardware_attestation) > 0 }
     meters [compute_cycles, memory_bytes]
     wasm_abi [now]

@@ -1,4 +1,4 @@
-// Poly VPN Scatter Routing — VRF-directed stream splitting across exits (v0.11.0)
+// Poly VPN Scatter Routing — VRF-directed stream splitting across exits (v0.12.0)
 //
 // Traffic is split into multiple streams via VRF so that no single exit
 // node sees more than a fraction of the user's traffic. Cover streams
@@ -15,7 +15,7 @@ data ScatterConfig : vpn v1 {
     vrf_seed: bytes(32),
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/scatter
+    govern lex global/org/polylabs/vpn/distribute
     cortex {
         obfuscate [user_id, vrf_seed]
         infer on_write
@@ -39,7 +39,7 @@ data ExitAllocation : vpn v1 {
     created_at: u64,
 }
     store kv
-    govern lex esn/global/org/polylabs/vpn/scatter
+    govern lex global/org/polylabs/vpn/distribute
     cortex {
         infer on_write
         on_anomaly alert "vpn-team"
@@ -55,7 +55,7 @@ type ReassembledStream = struct {
 stream scatter_events: event<ExitAllocation>
     | throttle 500/s burst 1000
     retention 90d
-    consumers [streamsight, audit_trail]
+    consumers [observe, audit_trail]
 
 // --- Split a packet across allocated exit streams ---
 circuit split_stream(
@@ -64,9 +64,9 @@ circuit split_stream(
     allocation: ExitAllocation,
 ) -> list<(bytes(16), bytes)>
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/scatter
-    precision C
-    observe metrics: [streams_split, split_latency_ns, packets_scattered]
+    lex global/org/polylabs/vpn/distribute
+    @precision C
+    @observe metrics: [streams_split, split_latency_ns, packets_scattered]
     invariant "min_exits" { config.num_exits >= 2 }
     invariant "weight_sum_100" { sum(allocation.allocations.*.weight_pct) == 100 }
     invariant "packet_nonempty" { len(packet) > 0 }
@@ -118,9 +118,9 @@ circuit allocate_exits(
     loads: list<u8>,
 ) -> ExitAllocation
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/scatter
-    precision C
-    observe metrics: [allocations_computed, exits_selected]
+    lex global/org/polylabs/vpn/distribute
+    @precision C
+    @observe metrics: [allocations_computed, exits_selected]
     invariant "enough_exits" { len(available_exits) >= config.num_exits + config.cover_streams }
     invariant "arrays_match" { len(available_exits) == len(latencies) }
     meters [compute_cycles]
@@ -172,13 +172,13 @@ circuit reassemble_stream(
     expected_count: u8,
 ) -> ReassembledStream
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/scatter
-    precision C
-    observe metrics: [streams_reassembled, reassembly_latency_ns, fragments_processed]
+    lex global/org/polylabs/vpn/distribute
+    @precision C
+    @observe metrics: [streams_reassembled, reassembly_latency_ns, fragments_processed]
     invariant "all_fragments" { len(fragments) == expected_count }
     meters [compute_cycles, bandwidth]
     wasm_abi [now]
-    kat_vector "sha3_256_integrity" {
+    @golden_test "sha3_256_integrity" {
         input: bytes(256, 0xAA)
         function: sha3_256
         expected: sha3_256(bytes(256, 0xAA))
@@ -196,15 +196,15 @@ circuit reassemble_stream(
     }
 }
 
-// --- Verify scatter allocation coverage invariants ---
+// --- Verify distribute allocation coverage invariants ---
 circuit verify_coverage(
     allocation: ExitAllocation,
     config: ScatterConfig,
 ) -> bool
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn/scatter
-    precision C
-    observe metrics: [coverage_checks, coverage_failures]
+    lex global/org/polylabs/vpn/distribute
+    @precision C
+    @observe metrics: [coverage_checks, coverage_failures]
     invariant "has_allocations" { len(allocation.allocations) > 0 }
     meters [compute_cycles]
 {
