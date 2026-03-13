@@ -1,15 +1,14 @@
-/// Poly VPN Traffic Mimicry — Statistical traffic analysis resistance
-///
-/// CLASSIFICATION: TRADE SECRET
-/// Implementation shapes scatter streams to match popular application
-/// traffic signatures. DPI and statistical classifiers see Netflix,
-/// YouTube, iCloud, Spotify, or Zoom — not VPN traffic.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN Traffic Mimicry — Statistical traffic analysis resistance (v0.11.0)
+//
+// CLASSIFICATION: TRADE SECRET
+// Implementation shapes scatter streams to match popular application
+// traffic signatures. DPI and statistical classifiers see Netflix,
+// YouTube, iCloud, Spotify, or Zoom — not VPN traffic.
+//
+// Companion to polyvpn_incognito.fl which wraps mimicry in a full
+// session lifecycle with constant_time + blind enforcement.
 
-import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
-
-// ── Types ────────────────────────────────────────────────────────
+import polykit_metering
 
 type MimicryProfile = enum {
     Netflix,
@@ -49,22 +48,34 @@ type ShapedPacket = struct {
     mimicry_profile: MimicryProfile,
 }
 
-type FingerprintResult = struct {
+data FingerprintResult : vpn v1 {
     detected_profile: string,
     confidence: f64,
     is_vpn_detected: bool,
     features_matched: u32,
     features_total: u32,
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/mimicry
+    cortex {
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
 
-// ── Shape Lookup ─────────────────────────────────────────────────
+stream fingerprint_events: event<FingerprintResult>
+    | throttle 100/s burst 200
+    retention 365d
+    consumers [streamsight, governance, alerting]
 
+// --- Look up traffic shape parameters for a mimicry profile ---
 circuit get_traffic_shape(profile: MimicryProfile) -> TrafficShape
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/mimicry
+    precision C
     constant_time true
     blind full
     observe metrics: [shape_lookups]
+    meters [compute_cycles]
     kat_vector "sha3_256_fingerprint" {
         input: "netflix-ja4-v1"
         function: sha3_256
@@ -147,22 +158,22 @@ circuit get_traffic_shape(profile: MimicryProfile) -> TrafficShape
     }
 }
 
-// ── Circuits ─────────────────────────────────────────────────────
-
+// --- Shape a single packet to match a mimicry profile ---
 circuit shape_traffic(
     packet: bytes,
     shape: TrafficShape,
     sequence: u64,
 ) -> ShapedPacket
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/mimicry
+    precision C
     constant_time true
     blind full
-    meters [compute_cycles, bandwidth]
     observe metrics: [packets_shaped, shaping_latency_ns]
     invariant "packet_nonempty" { len(packet) > 0 }
-    wasm_abi [csprng]
     monitor "shaping_latency" { shaping_latency_ns < 1000000 }
+    meters [compute_cycles, bandwidth]
+    wasm_abi [csprng]
     test golden "shape_traffic_netflix" {
         let pkt = bytes(512, 0xAA)
         let shape = get_traffic_shape(Netflix)
@@ -199,16 +210,18 @@ circuit shape_traffic(
     }
 }
 
+// --- Apply mimicry profile to a batch of packets ---
 circuit apply_mimicry_profile(
     packets: list<bytes>,
     profile: MimicryProfile,
 ) -> list<ShapedPacket>
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/mimicry
+    precision C
     constant_time true
     blind full
-    meters [compute_cycles, bandwidth]
     observe metrics: [profiles_applied, batch_size]
+    meters [compute_cycles, bandwidth]
 {
     let shape = get_traffic_shape(profile)
     parallel for i in 0..len(packets) {
@@ -216,16 +229,18 @@ circuit apply_mimicry_profile(
     }
 }
 
+// --- Generate cover traffic padding ---
 circuit generate_padding(
     config: PaddingConfig,
     count: u32,
 ) -> list<bytes>
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/mimicry
+    precision C
     constant_time true
     blind full
-    meters [bandwidth]
     observe metrics: [padding_generated_bytes, padding_packets]
+    meters [bandwidth]
     wasm_abi [csprng]
 {
     parallel for i in 0..count {
@@ -243,18 +258,20 @@ circuit generate_padding(
     }
 }
 
+// --- Detect traffic fingerprint from packet sample ---
 circuit detect_fingerprint(
     sample_packets: list<bytes>,
     sample_timings_us: list<u32>,
 ) -> FingerprintResult
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/mimicry
+    precision C
     constant_time true
     blind full
-    meters [compute_cycles]
     observe metrics: [fingerprint_checks, vpn_detections]
     invariant "sufficient_sample" { len(sample_packets) >= 100 }
     invariant "timings_match" { len(sample_packets) == len(sample_timings_us) }
+    meters [compute_cycles]
 {
     let avg_size = mean(sample_packets.*.len)
     let size_std = stddev(sample_packets.*.len)
@@ -281,11 +298,17 @@ circuit detect_fingerprint(
 
     let is_vpn = best_score < 0.3
 
-    FingerprintResult {
+    let result = FingerprintResult {
         detected_profile: best_match,
         confidence: best_score,
         is_vpn_detected: is_vpn,
         features_matched: features_matched,
         features_total: 5,
     }
+
+    if is_vpn {
+        emit(fingerprint_events, result)
+    }
+
+    result
 }

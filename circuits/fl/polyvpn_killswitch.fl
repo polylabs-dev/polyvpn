@@ -1,15 +1,11 @@
-/// Poly VPN Kill Switch — OS-level firewall enforcement
-///
-/// Prevents cleartext traffic leaks on tunnel failure. Activates
-/// platform firewall rules (WFP on Windows, pf on macOS, nftables
-/// on Linux) to block all non-tunnel traffic. Leak detection runs
-/// continuous probes to verify no DNS or IP leaks escape the tunnel.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN Kill Switch — OS-level firewall enforcement (v0.11.0)
+//
+// Prevents cleartext traffic leaks on tunnel failure. Activates
+// platform firewall rules (WFP on Windows, pf on macOS, nftables
+// on Linux) to block all non-tunnel traffic. Leak detection runs
+// continuous probes to verify no DNS or IP leaks escape the tunnel.
 
-import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
-
-// ── Types ────────────────────────────────────────────────────────
+import polykit_metering
 
 type KillswitchState = enum {
     Inactive,
@@ -32,7 +28,7 @@ type FirewallRule = struct {
     created_at: u64,
 }
 
-type LeakTestResult = struct {
+data LeakTestResult : vpn v1 {
     test_id: bytes(16),
     dns_leak: bool,
     ipv4_leak: bool,
@@ -42,28 +38,51 @@ type LeakTestResult = struct {
     exit_ids_verified: list<bytes(16)>,
     leaked_addresses: list<string>,
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/killswitch
+    cortex {
+        obfuscate [leaked_addresses]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
 
-type KillswitchConfig = struct {
+data KillswitchConfig : vpn v1 {
     user_id: bytes(16),
     allow_lan: bool,
     allow_dns_fallback: bool,
     block_ipv6: bool,
     tunnel_interfaces: list<string>,
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/killswitch
+    cortex {
+        obfuscate [user_id]
+        infer on_write
+    }
 
-// ── Circuits ─────────────────────────────────────────────────────
+stream killswitch_events: event<KillswitchConfig>
+    | throttle 100/s burst 200
+    retention 365d
+    consumers [streamsight, audit_trail, governance]
 
+stream leak_detection_events: event<LeakTestResult>
+    | throttle 500/s burst 1000
+    retention 365d
+    consumers [streamsight, governance, alerting]
+
+// --- Activate kill switch with OS firewall rules ---
 circuit activate_killswitch(
     config: KillswitchConfig,
     exit_endpoints: list<bytes(16)>,
 ) -> (KillswitchState, list<FirewallRule>)
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles]
+    lex esn/global/org/polylabs/vpn/killswitch
+    precision C
     observe metrics: [killswitch_activations, rules_created]
     monitor "killswitch_failures" { killswitch_activations > 0 }
     invariant "has_exits" { len(exit_endpoints) > 0 }
     invariant "has_tunnels" { len(config.tunnel_interfaces) > 0 }
+    meters [compute_cycles]
     wasm_abi [now, csprng, firewall_apply]
     test golden "activate_killswitch_basic" {
         let cfg = KillswitchConfig {
@@ -142,17 +161,20 @@ circuit activate_killswitch(
         rules = append(rules, block_v6)
     }
 
+    emit(killswitch_events, config)
     firewall_apply(rules)
     (Active, rules)
 }
 
+// --- Deactivate kill switch and remove firewall rules ---
 circuit deactivate_killswitch(
     active_rules: list<FirewallRule>,
 ) -> KillswitchState
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles]
+    lex esn/global/org/polylabs/vpn/killswitch
+    precision C
     observe metrics: [killswitch_deactivations]
+    meters [compute_cycles]
     wasm_abi [firewall_remove]
 {
     for rule in active_rules {
@@ -161,15 +183,17 @@ circuit deactivate_killswitch(
     Inactive
 }
 
+// --- Probe for DNS, IPv4, IPv6, and WebRTC leaks ---
 circuit check_for_leaks(
     user_id: bytes(16),
     exit_ids: list<bytes(16)>,
 ) -> LeakTestResult
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles, bandwidth]
+    lex esn/global/org/polylabs/vpn/killswitch
+    precision C
     observe metrics: [leak_tests, dns_leaks_detected, ip_leaks_detected]
     monitor "leak_rate" { dns_leaks_detected + ip_leaks_detected == 0 }
+    meters [compute_cycles, bandwidth]
     wasm_abi [now, csprng, net_probe]
 {
     let ts = now_ns() / 1000000
@@ -194,7 +218,7 @@ circuit check_for_leaks(
     if ipv6_leak { leaked = append(leaked, ip6_result.leaked_addr) }
     if webrtc_leak { leaked = append(leaked, webrtc_result.leaked_addr) }
 
-    LeakTestResult {
+    let result = LeakTestResult {
         test_id: test_id,
         dns_leak: dns_leak,
         ipv4_leak: ipv4_leak,
@@ -204,16 +228,24 @@ circuit check_for_leaks(
         exit_ids_verified: exit_ids,
         leaked_addresses: leaked,
     }
+
+    if dns_leak or ipv4_leak or ipv6_leak or webrtc_leak {
+        emit(leak_detection_events, result)
+    }
+
+    result
 }
 
+// --- Enforce DNS-only-through-tunnel firewall policy ---
 circuit enforce_dns_policy(
     config: KillswitchConfig,
     tunnel_dns_servers: list<bytes(16)>,
 ) -> list<FirewallRule>
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles]
+    lex esn/global/org/polylabs/vpn/killswitch
+    precision C
     observe metrics: [dns_policies_enforced]
+    meters [compute_cycles]
     wasm_abi [now, firewall_apply]
 {
     let ts = now_ns() / 1000000

@@ -1,8 +1,8 @@
 # Poly VPN
 
 **GitHub**: [polylabs-dev/polyvpn](https://github.com/polylabs-dev/polyvpn)
-**Platform**: eStream v0.8.3
-**Depends on**: PolyKit v0.3.0, eStream graph/DAG constructs
+**Platform**: eStream v0.11.0
+**Depends on**: PolyKit, eStream graph/DAG constructs
 
 ## Purpose
 
@@ -14,8 +14,9 @@ HKDF context: `poly-vpn-v1`. User identities are completely isolated from all ot
 
 ## Structure
 
-- `circuits/fl/` — FastLang circuit definitions (encrypt, scatter, mimicry, kill switch, DNS, metering)
+- `circuits/fl/` — FastLang circuit definitions (encrypt, scatter, mimicry, kill switch, DNS, metering, incognito, RBAC)
 - `circuits/fl/graphs/` — Graph/DAG constructs (vpn_exit_mesh, tunnel_route)
+- `estream.toml` — Platform v0.11.0 component manifest
 - `crates/` — Rust crates (poly-vpn-core, poly-exit-node, poly-vpn-platform)
 - `apps/desktop/` — Tauri desktop (Mac, Win, Linux)
 - `apps/mobile/` — React Native + Rust FFI (iOS, Android)

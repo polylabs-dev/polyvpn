@@ -1,17 +1,13 @@
-/// Poly VPN Exit Graph — Stratum graph storage + Cortex AI governance
-///
-/// Models the exit node network as a typed graph with real-time overlays.
-/// Cortex redacts endpoint addresses and private key hashes; obfuscates
-/// jurisdiction and operator identity. The ai_feed drives optimal
-/// multi-exit scatter route selection.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN Exit Graph — Stratum graph storage + Cortex AI governance (v0.11.0)
+//
+// Models the exit node network as a typed graph with real-time overlays.
+// Cortex redacts endpoint addresses and private key hashes; obfuscates
+// jurisdiction and operator identity. The ai_feed drives optimal
+// multi-exit scatter route selection.
 
-import polykit_identity from "../../../polykit/circuits/fl/polykit_identity.fl"
-import polykit_metering from "../../../polykit/circuits/fl/polykit_metering.fl"
-import polykit_governance from "../../../polykit/circuits/fl/polykit_governance.fl"
-
-// ── Enums ────────────────────────────────────────────────────────
+import polykit_identity
+import polykit_metering
+import polykit_governance
 
 type ExitOperatorType = enum {
     PolyLabs,
@@ -26,9 +22,7 @@ type ExitStatus = enum {
     Blacklisted,
 }
 
-// ── Data: Node types (Stratum store graph + Cortex) ─────────────
-
-data ExitNode : app v1 {
+data ExitNode : vpn v1 {
     exit_id: string,
     region: string,
     endpoint_address: string,
@@ -43,7 +37,7 @@ data ExitNode : app v1 {
     updated_at: u64,
 }
     store graph
-    govern lex esn/global/org/polylabs/vpn
+    govern lex esn/global/org/polylabs/vpn/exit
     cortex {
         redact [endpoint_address, private_key_hash]
         obfuscate [jurisdiction, operator_id]
@@ -51,7 +45,7 @@ data ExitNode : app v1 {
         on_anomaly alert "vpn-ops"
     }
 
-data PeerNode : app v1 {
+data PeerNode : vpn v1 {
     peer_id: string,
     exit_id: string,
     connected_at: u64,
@@ -59,13 +53,11 @@ data PeerNode : app v1 {
     bandwidth_mbps: u32,
 }
     store graph
-    govern lex esn/global/org/polylabs/vpn
+    govern lex esn/global/org/polylabs/vpn/exit
     cortex {
         obfuscate [peer_id]
         infer on_read
     }
-
-// ── Edge types ──────────────────────────────────────────────────
 
 type TunnelEdge = struct {
     edge_id: bytes(16),
@@ -83,8 +75,6 @@ type PeerEdge = struct {
     latency_ns: u64,
     health_score: u8,
 }
-
-// ── Graph definition ────────────────────────────────────────────
 
 graph vpn_exit_mesh {
     node ExitNode
@@ -121,18 +111,17 @@ series exit_series: vpn_exit_mesh
     lattice_imprint true
     witness_attest true
 
-// ── Streams ─────────────────────────────────────────────────────
-
 stream exit_graph_mutations: event<ExitNode>
+    | throttle 200/s burst 500
     retention 365d
     consumers [governance, audit, streamsight, vpn_ops]
 
 stream exit_health_events: event<ExitNode>
+    | throttle 1000/s burst 2000
     retention 90d
     consumers [streamsight, console, vpn_ops]
 
-// ── Circuits: Node management ───────────────────────────────────
-
+// --- Register a new exit node in the mesh ---
 circuit register_exit(
     operator_pk: bytes(2592),
     region: string,
@@ -143,7 +132,7 @@ circuit register_exit(
     operator_type: u8,
     signing_sk: bytes(4896),
 ) -> ExitNode
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/exit
     status production
     precision C
     povc true
@@ -214,6 +203,7 @@ circuit register_exit(
     exit
 }
 
+// --- Select optimal exits using AI-assisted scoring ---
 circuit select_exits(
     user_id: bytes(16),
     num_exits: u8,
@@ -221,7 +211,7 @@ circuit select_exits(
     avoid_jurisdictions: list<string>,
     min_bandwidth_mbps: u32,
 ) -> list<ExitNode>
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/exit
     status production
     precision B
     observe metrics: [exit_selections, selection_latency_ns, ai_suggestions_used]
@@ -259,6 +249,7 @@ circuit select_exits(
     }
 }
 
+// --- Rotate a subset of active exits ---
 circuit rotate_exits(
     user_id: bytes(16),
     current_exits: list<string>,
@@ -266,7 +257,7 @@ circuit rotate_exits(
     preferred_regions: list<string>,
     avoid_jurisdictions: list<string>,
 ) -> list<ExitNode>
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/exit
     status production
     precision B
     observe metrics: [exit_rotations]
@@ -295,6 +286,7 @@ circuit rotate_exits(
     all_exits
 }
 
+// --- Update exit node health overlays ---
 circuit update_exit_health(
     exit_id: string,
     latency_ns: u64,
@@ -302,7 +294,7 @@ circuit update_exit_health(
     load_pct: u8,
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/exit
     status production
     precision B
     observe metrics: [health_updates, degraded_exits]
@@ -336,12 +328,13 @@ circuit update_exit_health(
     true
 }
 
+// --- Blacklist an exit node ---
 circuit blacklist_exit(
     exit_id: string,
     reason: string,
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/exit
     status production
     precision C
     povc true
@@ -364,13 +357,14 @@ circuit blacklist_exit(
     true
 }
 
+// --- Hardware-attested exit node registration ---
 circuit attest_exit(
     exit_id: string,
     hardware_attestation: bytes,
     operator_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> string
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/exit
     status production
     precision C
     povc true

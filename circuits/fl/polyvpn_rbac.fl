@@ -1,0 +1,354 @@
+// Poly VPN RBAC — Role-based access control for VPN operations (v0.11.0)
+//
+// Fine-grained RBAC graph governing who can manage exits, routes,
+// incognito profiles, and org-level VPN policies. Inherits from the
+// eStream core RBAC pattern but scoped entirely to the VPN lex namespace.
+//
+// Permission bitmask layout (u64):
+//   bit 0  — vpn.connect           (use VPN)
+//   bit 1  — vpn.disconnect        (force-disconnect sessions)
+//   bit 2  — vpn.incognito         (activate incognito mode)
+//   bit 3  — vpn.exit.register     (register exit nodes)
+//   bit 4  — vpn.exit.blacklist    (blacklist exit nodes)
+//   bit 5  — vpn.exit.attest       (perform hardware attestation)
+//   bit 6  — vpn.route.build       (build scatter routes)
+//   bit 7  — vpn.route.reroute     (reroute active hops)
+//   bit 8  — vpn.policy.manage     (manage org VPN policies)
+//   bit 9  — vpn.audit.read        (read audit trails)
+//   bit 10 — vpn.admin             (full admin)
+
+import polykit_identity
+import polykit_metering
+import polykit_governance
+
+data VpnRole : vpn v1 {
+    role_id: bytes(16),
+    name: string,
+    description: string,
+    permission_bitmask: u64,
+    priority: u8,
+    created_at: u64,
+    created_by: bytes(32),
+}
+    store kv
+    govern lex esn/global/org/polylabs/vpn/rbac
+    cortex {
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
+
+data VpnRoleAssignment : vpn v1 {
+    assignment_id: bytes(16),
+    principal: bytes(32),
+    role_id: bytes(16),
+    scope_type: u8,
+    scope_id: bytes(32),
+    granted_at: u64,
+    granted_by: bytes(32),
+    expires_at: u64,
+}
+    store kv
+    govern lex esn/global/org/polylabs/vpn/rbac
+    cortex {
+        obfuscate [principal]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
+
+type VpnPermissionSet = struct {
+    connect: bool,
+    disconnect: bool,
+    incognito: bool,
+    exit_register: bool,
+    exit_blacklist: bool,
+    exit_attest: bool,
+    route_build: bool,
+    route_reroute: bool,
+    policy_manage: bool,
+    audit_read: bool,
+    admin: bool,
+}
+
+type InheritanceEdge = struct {
+    edge_id: bytes(16),
+    direction: u8,
+    propagation: u8,
+}
+
+graph vpn_rbac {
+    node VpnRole
+    edge InheritanceEdge
+
+    overlay permissions: u64 bitmask
+    overlay scope_binding: bytes(32) curate
+    overlay principal_map: bytes(32) curate delta_curate
+    overlay role_inheritance: u64 bitmask
+    overlay audit_trail: bytes(32) curate delta_curate
+    overlay expiry: u64 bitmask
+
+    storage csr {
+        hot @bram,
+        warm @ddr,
+        cold @nvme,
+    }
+
+    ai_feed permission_anomaly {
+        predict [permissions, principal_map]
+        suggest [suspicious_grants, over_privileged_principals]
+        confidence 0.90
+    }
+
+    observe vpn_rbac: [permissions, principal_map, audit_trail] threshold: {
+        anomaly_score 0.95
+        baseline_window 300
+    }
+}
+
+series vpn_rbac_series: vpn_rbac
+    merkle_chain true
+    lattice_imprint true
+    witness_attest true
+
+stream vpn_rbac_events: event<VpnRoleAssignment>
+    | throttle 200/s burst 500
+    retention 7y
+    consumers [governance, audit, compliance, streamsight]
+
+stream vpn_permission_changes: event<VpnRole>
+    | throttle 100/s burst 200
+    retention 7y
+    consumers [audit, streamsight, alerting]
+
+// --- Create a new VPN role definition ---
+circuit create_vpn_role(
+    name: string,
+    description: string,
+    permission_bitmask: u64,
+    priority: u8,
+    creator_pk: bytes(2592),
+    signing_sk: bytes(4896),
+) -> VpnRole
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision C
+    povc true
+    observe metrics: [roles_created]
+    invariant "name_valid" { len(name) > 0 }
+    invariant "permissions_nonzero" { permission_bitmask > 0 }
+    meters [compute_cycles, memory_bytes]
+    wasm_abi [eslite_insert, now, csprng]
+    test golden "create_operator_role" {
+        let pk = bytes(2592, 0xAA)
+        let sk = bytes(4896, 0xBB)
+        let role = create_vpn_role("exit-operator", "Can register and attest exits", 0x38, 50, pk, sk)
+        assert role.name == "exit-operator"
+        assert role.permission_bitmask == 0x38
+    }
+{
+    let ts = now_ns() / 1000000
+    let creator_id = polykit_identity::derive_user_id(creator_pk)
+    let role_id = bit_slice(sha3_256(concat(name, creator_id, csprng(8), ts)), 0, 128)
+
+    let role = VpnRole {
+        role_id: role_id,
+        name: name,
+        description: description,
+        permission_bitmask: permission_bitmask,
+        priority: priority,
+        created_at: ts,
+        created_by: creator_id,
+    }
+
+    let _sig = mldsa_sign(signing_sk, serialize(role))
+    graph_insert(vpn_rbac, role)
+    overlay_set(vpn_rbac, role_id, permissions, permission_bitmask)
+
+    eslite_insert("vpn_roles", role_id, serialize(role))
+    emit(vpn_permission_changes, role)
+
+    polykit_metering::record_usage(creator_id, "vpn_rbac_create_role", DimensionValues {
+        executions: 1, hashes: 1, bandwidth: 0,
+        storage: 256, observables: 1, proofs: 1, circuits: 0, mpc_sessions: 0,
+    })
+
+    role
+}
+
+// --- Assign a VPN role to a principal at a scope ---
+circuit assign_vpn_role(
+    principal: bytes(32),
+    role_id: bytes(16),
+    scope_type: u8,
+    scope_id: bytes(32),
+    expires_at: u64,
+    grantor_pk: bytes(2592),
+    signing_sk: bytes(4896),
+) -> VpnRoleAssignment
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision C
+    povc true
+    observe metrics: [roles_assigned, scope_type_distribution]
+    invariant "principal_nonzero" { principal != zero(32) }
+    invariant "role_exists" { eslite_exists("vpn_roles", role_id) }
+    meters [compute_cycles, memory_bytes]
+    wasm_abi [eslite_insert, eslite_query, now, csprng]
+{
+    let ts = now_ns() / 1000000
+    let grantor_id = polykit_identity::derive_user_id(grantor_pk)
+    let assignment_id = bit_slice(sha3_256(concat(principal, role_id, scope_id, csprng(8), ts)), 0, 128)
+
+    let assignment = VpnRoleAssignment {
+        assignment_id: assignment_id,
+        principal: principal,
+        role_id: role_id,
+        scope_type: scope_type,
+        scope_id: scope_id,
+        granted_at: ts,
+        granted_by: grantor_id,
+        expires_at: expires_at,
+    }
+
+    let _sig = mldsa_sign(signing_sk, serialize(assignment))
+    overlay_set(vpn_rbac, role_id, principal_map, principal)
+    overlay_set(vpn_rbac, role_id, audit_trail, sha3_256(serialize(assignment)))
+
+    eslite_insert("vpn_role_assignments", assignment_id, serialize(assignment))
+    emit(vpn_rbac_events, assignment)
+
+    assignment
+}
+
+// --- Revoke a VPN role assignment ---
+circuit revoke_vpn_role(
+    assignment_id: bytes(16),
+    revoker_pk: bytes(2592),
+    signing_sk: bytes(4896),
+) -> bool
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision C
+    povc true
+    observe metrics: [roles_revoked]
+    invariant "assignment_exists" { eslite_exists("vpn_role_assignments", assignment_id) }
+    meters [compute_cycles]
+    wasm_abi [eslite_delete, eslite_query, now]
+{
+    let ts = now_ns() / 1000000
+    let revoker_id = polykit_identity::derive_user_id(revoker_pk)
+    let assignment = eslite_query("vpn_role_assignments", assignment_id)
+
+    overlay_set(vpn_rbac, assignment.role_id, audit_trail,
+        sha3_256(concat("revoked:", assignment_id, revoker_id, ts)))
+
+    eslite_delete("vpn_role_assignments", assignment_id)
+    emit(vpn_rbac_events, assignment)
+
+    true
+}
+
+// --- Check if principal has a specific VPN permission at scope ---
+circuit check_vpn_permission(
+    principal: bytes(32),
+    scope_id: bytes(32),
+    permission_bit: u64,
+) -> bool
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision D
+    observe metrics: [permission_checks, permission_granted, permission_denied]
+    meters [compute_cycles]
+{
+    let effective = resolve_vpn_permissions(principal, scope_id)
+    (effective & permission_bit) != 0
+}
+
+// --- Resolve effective permissions for principal at scope (walks inheritance) ---
+circuit resolve_vpn_permissions(
+    principal: bytes(32),
+    scope_id: bytes(32),
+) -> u64
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision C
+    observe metrics: [permission_resolutions, inheritance_depth]
+    meters [compute_cycles]
+{
+    let assignments = eslite_query_index("vpn_role_assignments", "principal", principal)
+    let ts = now_ns() / 1000000
+    let effective_mask = 0
+
+    for assignment in assignments {
+        if assignment.expires_at > ts or assignment.expires_at == 0 {
+            if assignment.scope_id == scope_id or assignment.scope_type == 0 {
+                let role = eslite_query("vpn_roles", assignment.role_id)
+                effective_mask = effective_mask | role.permission_bitmask
+
+                let inherited = overlay_get(vpn_rbac, assignment.role_id, role_inheritance)
+                effective_mask = effective_mask | inherited
+            }
+        }
+    }
+
+    effective_mask
+}
+
+// --- Expand bitmask to human-readable permission set ---
+circuit expand_permissions(bitmask: u64) -> VpnPermissionSet
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision D
+    meters [compute_cycles]
+{
+    VpnPermissionSet {
+        connect:        (bitmask & 0x001) != 0,
+        disconnect:     (bitmask & 0x002) != 0,
+        incognito:      (bitmask & 0x004) != 0,
+        exit_register:  (bitmask & 0x008) != 0,
+        exit_blacklist: (bitmask & 0x010) != 0,
+        exit_attest:    (bitmask & 0x020) != 0,
+        route_build:    (bitmask & 0x040) != 0,
+        route_reroute:  (bitmask & 0x080) != 0,
+        policy_manage:  (bitmask & 0x100) != 0,
+        audit_read:     (bitmask & 0x200) != 0,
+        admin:          (bitmask & 0x400) != 0,
+    }
+}
+
+// --- Expire stale role assignments ---
+circuit expire_stale_assignments(current_time: u64) -> u32
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision C
+    povc true
+    observe metrics: [expired_assignments]
+    meters [compute_cycles]
+    wasm_abi [eslite_query, eslite_delete]
+{
+    let all = eslite_query_all("vpn_role_assignments")
+    let expired_count = 0
+
+    for assignment in all {
+        if assignment.expires_at > 0 and assignment.expires_at <= current_time {
+            eslite_delete("vpn_role_assignments", assignment.assignment_id)
+            overlay_set(vpn_rbac, assignment.role_id, audit_trail,
+                sha3_256(concat("expired:", assignment.assignment_id, current_time)))
+            expired_count = expired_count + 1
+        }
+    }
+
+    expired_count
+}
+
+// --- Audit: list all role assignments for a principal ---
+circuit audit_principal_vpn(
+    principal: bytes(32),
+) -> list<VpnRoleAssignment>
+    lex esn/global/org/polylabs/vpn/rbac
+    status production
+    precision B
+    observe metrics: [audit_queries]
+    meters [compute_cycles]
+{
+    eslite_query_index("vpn_role_assignments", "principal", principal)
+}

@@ -1,21 +1,17 @@
-/// Poly VPN Platform Health — Blind relay pattern health monitoring
-///
-/// Aggregates tunnel-operation metrics through blinded, cohort-enforced telemetry.
-/// Stratum: kv store + lex governance under esn/global/org/polylabs/vpn.
-/// Cortex: obfuscation, write-time inference, anomaly alerting to vpn-team.
-///
-/// Zero-linkage: HKDF("poly-vpn-telemetry-v1") isolates all identity.
-/// No tunnel endpoints, traffic content, or routing paths ever reach StreamSight.
-/// Traffic mimicry must maintain >=95% coverage at all times.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN Platform Health — Blind relay pattern health monitoring (v0.11.0)
+//
+// Aggregates tunnel-operation metrics through blinded, cohort-enforced telemetry.
+// Stratum: kv store + lex governance under esn/global/org/polylabs/vpn.
+// Cortex: obfuscation, write-time inference, anomaly alerting to vpn-team.
+//
+// Zero-linkage: HKDF("poly-vpn-telemetry-v1") isolates all identity.
+// No tunnel endpoints, traffic content, or routing paths ever reach StreamSight.
+// Traffic mimicry must maintain >=95% coverage at all times.
 
-import polykit_blind_telemetry from "../../polykit/circuits/fl/polykit_blind_telemetry.fl"
-import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+import polykit_blind_telemetry
+import polykit_metering
 
-// ── Data Declarations with Stratum + Cortex ─────────────────────────
-
-data PlatformMetrics : app v1 {
+data PlatformMetrics : vpn v1 {
     blinded_user_id: bytes(32),
     cohort_ok: bool,
     cohort_size: u32,
@@ -46,26 +42,23 @@ type HealthStatus = enum {
     Critical,
 }
 
-// ── Streams ─────────────────────────────────────────────────────────
-
 stream vpn_health_events: event<PlatformMetrics>
+    | throttle 500/s burst 1000
     retention 365d
     consumers [streamsight, audit_trail]
     classify blinded_user_id: METADATA, cohort_size: METADATA
 
 stream vpn_anomaly_events: event<PlatformMetrics>
+    | throttle 100/s burst 200
     retention forever
     consumers [streamsight, governance, alerting]
-
-// ── Series ──────────────────────────────────────────────────────────
 
 series vpn_health_series: vpn_health_events
     merkle_chain true
     lattice_imprint true
     witness_attest true
 
-// ── Main Platform Health Circuit ────────────────────────────────────
-
+// --- Collect blinded platform health metrics ---
 circuit vpn_platform_health(
     spark_id: bytes(32),
     active_user_count: u32,
@@ -94,6 +87,7 @@ circuit vpn_platform_health(
     monitor "tunnel_latency" { tunnel_latency_avg_ms < 200 }
     esz_emit "verify/vpn_health.esz"
     li_feed full_escir true, optimized_ir true, optimization_metadata true
+    meters [compute_cycles]
     fuzz_target
     test golden "healthy_platform" {
         let spark = bytes(32, 0xAA)
@@ -196,8 +190,7 @@ circuit vpn_platform_health(
     metrics
 }
 
-// ── Anomaly Check Circuit with Cortex AI Feed ───────────────────────
-
+// --- Anomaly check with Cortex AI feed ---
 circuit vpn_anomaly_check(
     recent_metrics: list<PlatformMetrics>,
     window_ms: u64,
@@ -211,6 +204,7 @@ circuit vpn_anomaly_check(
     streamsight true
     observe metrics: [anomaly_checks, anomaly_detections]
     monitor "anomaly_rate" { anomaly_detections < 50/hr }
+    meters [compute_cycles]
     cortex {
         ai_feed {
             model "vpn_health_classifier"

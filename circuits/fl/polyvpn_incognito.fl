@@ -1,0 +1,284 @@
+// Poly VPN Incognito Mode — Traffic mimicry session lifecycle (v0.11.0)
+//
+// CLASSIFICATION: TRADE SECRET — MOST SENSITIVE CIRCUIT IN THE SUITE
+// Delivered as compiled WASM post-install. Source never leaves build infra.
+//
+// Wraps traffic mimicry profiles (Netflix, YouTube, iCloud, Spotify, Zoom)
+// in a full session lifecycle with constant_time + blind enforcement.
+// All operations are constant-time to prevent timing side channels.
+// Full blinding prevents intermediate value observation.
+//
+// Safety property: no_traffic_signature_leak — at no point during the
+// session lifecycle can an observer distinguish VPN traffic from the
+// selected mimicry profile's genuine traffic pattern.
+
+import polykit_metering
+import polyvpn_mimicry
+import polyvpn_encrypt
+
+data IncognitoSession : vpn v1 {
+    session_id: bytes(32),
+    user_id: bytes(16),
+    active_profile: MimicryProfile,
+    tunnel_session_id: bytes(32),
+    cover_bandwidth_mbps: u32,
+    profile_switch_count: u32,
+    packets_shaped: u64,
+    bytes_shaped: u64,
+    fingerprint_passes: u64,
+    fingerprint_failures: u64,
+    started_at: u64,
+    last_profile_switch_at: u64,
+}
+    store kv
+    govern lex esn/global/org/polylabs/vpn/incognito
+    cortex {
+        redact [tunnel_session_id]
+        obfuscate [user_id, session_id]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
+
+data IncognitoHealthCheck : vpn v1 {
+    session_id: bytes(32),
+    profile: MimicryProfile,
+    fingerprint_result: FingerprintResult,
+    cover_active: bool,
+    latency_within_profile: bool,
+    passed: bool,
+    checked_at: u64,
+}
+    store kv
+    govern lex esn/global/org/polylabs/vpn/incognito
+    cortex {
+        obfuscate [session_id]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
+
+type ProfileTransition = struct {
+    from_profile: MimicryProfile,
+    to_profile: MimicryProfile,
+    transition_packets: u32,
+    ramp_duration_ms: u32,
+}
+
+stream incognito_events: event<IncognitoSession>
+    | throttle 100/s burst 200
+    retention 365d
+    consumers [streamsight, audit_trail]
+
+stream incognito_health_events: event<IncognitoHealthCheck>
+    | throttle 500/s burst 1000
+    retention 90d
+    consumers [streamsight, governance, alerting]
+
+// --- Activate incognito mode with a mimicry profile ---
+circuit activate_incognito(
+    user_id: bytes(16),
+    tunnel_session_id: bytes(32),
+    profile: MimicryProfile,
+    cover_bandwidth_mbps: u32,
+) -> IncognitoSession
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn/incognito
+    precision C
+    constant_time true
+    blind full
+    property safety "no_traffic_signature_leak" { no_distinguishable_pattern(profile) }
+    observe metrics: [incognito_activations, profile_type]
+    monitor "activation_rate" { incognito_activations < 100/s }
+    invariant "tunnel_active" { tunnel_session_id != zero(32) }
+    invariant "valid_cover_bw" { cover_bandwidth_mbps > 0 }
+    meters [compute_cycles]
+    wasm_abi [now, csprng]
+    test golden "activate_netflix_incognito" {
+        let uid = bytes(16, 0xAA)
+        let tsid = bytes(32, 0xBB)
+        let session = activate_incognito(uid, tsid, Netflix, 50)
+        assert session.active_profile == Netflix
+        assert session.cover_bandwidth_mbps == 50
+        assert session.profile_switch_count == 0
+    }
+    test golden "activate_zoom_incognito" {
+        let uid = bytes(16, 0xCC)
+        let tsid = bytes(32, 0xDD)
+        let session = activate_incognito(uid, tsid, Zoom, 10)
+        assert session.active_profile == Zoom
+    }
+{
+    let ts = now_ns() / 1000000
+    let seed = concat(user_id, tunnel_session_id, csprng(16), ts)
+    let session_id = sha3_256(seed)
+
+    let _shape = polyvpn_mimicry::get_traffic_shape(profile)
+
+    let session = IncognitoSession {
+        session_id: session_id,
+        user_id: user_id,
+        active_profile: profile,
+        tunnel_session_id: tunnel_session_id,
+        cover_bandwidth_mbps: cover_bandwidth_mbps,
+        profile_switch_count: 0,
+        packets_shaped: 0,
+        bytes_shaped: 0,
+        fingerprint_passes: 0,
+        fingerprint_failures: 0,
+        started_at: ts,
+        last_profile_switch_at: ts,
+    }
+
+    eslite_insert("incognito_sessions", session_id, serialize(session))
+    emit(incognito_events, session)
+    session
+}
+
+// --- Switch mimicry profile with gradual transition ramp ---
+circuit switch_profile(
+    session: IncognitoSession,
+    new_profile: MimicryProfile,
+    ramp_duration_ms: u32,
+) -> (IncognitoSession, ProfileTransition)
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn/incognito
+    precision C
+    constant_time true
+    blind full
+    property safety "no_traffic_signature_leak" { no_distinguishable_pattern(new_profile) }
+    observe metrics: [profile_switches, switch_latency_ms]
+    invariant "different_profile" { session.active_profile != new_profile }
+    invariant "session_active" { session.started_at > 0 }
+    meters [compute_cycles]
+    wasm_abi [now, csprng]
+{
+    let ts = now_ns() / 1000000
+
+    let old_shape = polyvpn_mimicry::get_traffic_shape(session.active_profile)
+    let new_shape = polyvpn_mimicry::get_traffic_shape(new_profile)
+
+    let transition_packets = ramp_duration_ms / max(1, new_shape.inter_packet_delay_us / 1000)
+
+    let transition = ProfileTransition {
+        from_profile: session.active_profile,
+        to_profile: new_profile,
+        transition_packets: transition_packets,
+        ramp_duration_ms: ramp_duration_ms,
+    }
+
+    let updated = IncognitoSession {
+        ...session,
+        active_profile: new_profile,
+        profile_switch_count: session.profile_switch_count + 1,
+        last_profile_switch_at: ts,
+    }
+
+    eslite_insert("incognito_sessions", session.session_id, serialize(updated))
+    emit(incognito_events, updated)
+    (updated, transition)
+}
+
+// --- Shape a packet through the active incognito profile ---
+circuit shape_incognito_packet(
+    session: IncognitoSession,
+    packet: bytes,
+    sequence: u64,
+) -> (ShapedPacket, IncognitoSession)
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn/incognito
+    precision C
+    constant_time true
+    blind full
+    property safety "no_traffic_signature_leak" { no_distinguishable_pattern(session.active_profile) }
+    observe metrics: [incognito_packets_shaped, shaping_latency_ns]
+    invariant "packet_nonempty" { len(packet) > 0 }
+    meters [compute_cycles, bandwidth]
+    wasm_abi [csprng]
+    fuzz_target "shape_incognito_fuzz" {
+        fuzz session: IncognitoSession { random }
+        fuzz packet: bytes(random, 1..4096)
+        fuzz sequence: u64 { random }
+        assert len(output.0.payload) > 0
+    }
+{
+    let shape = polyvpn_mimicry::get_traffic_shape(session.active_profile)
+    let shaped = polyvpn_mimicry::shape_traffic(packet, shape, sequence)
+
+    let updated = IncognitoSession {
+        ...session,
+        packets_shaped: session.packets_shaped + 1,
+        bytes_shaped: session.bytes_shaped + len(packet),
+    }
+
+    (shaped, updated)
+}
+
+// --- Verify incognito session is indistinguishable from profile ---
+circuit verify_incognito_health(
+    session: IncognitoSession,
+    sample_packets: list<bytes>,
+    sample_timings_us: list<u32>,
+) -> IncognitoHealthCheck
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn/incognito
+    precision C
+    constant_time true
+    blind full
+    property safety "no_traffic_signature_leak" { no_distinguishable_pattern(session.active_profile) }
+    observe metrics: [incognito_health_checks, health_failures]
+    monitor "incognito_health_failure_rate" { health_failures == 0 }
+    invariant "sufficient_sample" { len(sample_packets) >= 100 }
+    meters [compute_cycles]
+    wasm_abi [now]
+{
+    let ts = now_ns() / 1000000
+
+    let fp = polyvpn_mimicry::detect_fingerprint(sample_packets, sample_timings_us)
+
+    let shape = polyvpn_mimicry::get_traffic_shape(session.active_profile)
+    let avg_timing = mean(sample_timings_us)
+    let latency_ok = abs(avg_timing - shape.inter_packet_delay_us) < shape.delay_jitter_us * 3
+
+    let passed = not fp.is_vpn_detected and latency_ok and fp.confidence > 0.7
+
+    let check = IncognitoHealthCheck {
+        session_id: session.session_id,
+        profile: session.active_profile,
+        fingerprint_result: fp,
+        cover_active: session.cover_bandwidth_mbps > 0,
+        latency_within_profile: latency_ok,
+        passed: passed,
+        checked_at: ts,
+    }
+
+    emit(incognito_health_events, check)
+    check
+}
+
+// --- Deactivate incognito mode and flush session state ---
+circuit deactivate_incognito(
+    session: IncognitoSession,
+) -> bool
+    profile poly_framework_sensitive
+    lex esn/global/org/polylabs/vpn/incognito
+    precision C
+    constant_time true
+    blind full
+    observe metrics: [incognito_deactivations]
+    meters [compute_cycles]
+    wasm_abi [now, eslite_delete]
+{
+    eslite_delete("incognito_sessions", session.session_id)
+
+    polykit_metering::record_usage(session.user_id, "vpn_incognito_session", DimensionValues {
+        executions: 1,
+        hashes: session.packets_shaped,
+        bandwidth: session.bytes_shaped,
+        storage: 0,
+        observables: session.fingerprint_passes + session.fingerprint_failures,
+        proofs: 0,
+        circuits: session.profile_switch_count,
+        mpc_sessions: 0,
+    })
+
+    true
+}

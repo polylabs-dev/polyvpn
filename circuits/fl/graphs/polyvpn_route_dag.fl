@@ -1,16 +1,12 @@
-/// Poly VPN Route DAG — Stratum DAG storage + Cortex AI governance
-///
-/// Multi-hop scatter routing modeled as a DAG. Each route is a directed
-/// acyclic path through the exit mesh. Acyclicity enforced to prevent
-/// routing loops. ML-DSA-87 signed; merkle-CSR backed; PoVC witnessed.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN Route DAG — Stratum DAG storage + Cortex AI governance (v0.11.0)
+//
+// Multi-hop scatter routing modeled as a DAG. Each route is a directed
+// acyclic path through the exit mesh. Acyclicity enforced to prevent
+// routing loops. ML-DSA-87 signed; merkle-CSR backed; PoVC witnessed.
 
-import polykit_identity from "../../../polykit/circuits/fl/polykit_identity.fl"
-import polykit_metering from "../../../polykit/circuits/fl/polykit_metering.fl"
-import polykit_governance from "../../../polykit/circuits/fl/polykit_governance.fl"
-
-// ── Enums ────────────────────────────────────────────────────────
+import polykit_identity
+import polykit_metering
+import polykit_governance
 
 type RouteStatus = enum {
     Building,
@@ -19,9 +15,7 @@ type RouteStatus = enum {
     TornDown,
 }
 
-// ── Data: Node types (Stratum store dag + Cortex) ────────────────
-
-data RouteNode : app v1 {
+data RouteNode : vpn v1 {
     route_id: string,
     exit_id: string,
     hop_position: u8,
@@ -33,15 +27,13 @@ data RouteNode : app v1 {
     updated_at: u64,
 }
     store dag
-    govern lex esn/global/org/polylabs/vpn
+    govern lex esn/global/org/polylabs/vpn/route
     cortex {
         redact [hop_key]
         obfuscate [exit_id]
         infer on_write
         on_anomaly alert "vpn-ops"
     }
-
-// ── Edge types ──────────────────────────────────────────────────
 
 type HopEdge = struct {
     edge_id: bytes(16),
@@ -50,8 +42,6 @@ type HopEdge = struct {
     encryption_overhead_ns: u64,
     bandwidth_mbps: u32,
 }
-
-// ── DAG definition ──────────────────────────────────────────────
 
 dag tunnel_route {
     node RouteNode
@@ -88,25 +78,24 @@ series route_series: tunnel_route
     lattice_imprint true
     witness_attest true
 
-// ── Streams ─────────────────────────────────────────────────────
-
 stream route_mutations: event<RouteNode>
+    | throttle 500/s burst 1000
     retention 90d
     consumers [governance, audit, streamsight, vpn_ops]
 
 stream route_health_events: event<RouteNode>
+    | throttle 1000/s burst 2000
     retention 30d
     consumers [streamsight, console, vpn_ops]
 
-// ── Circuits ─────────────────────────────────────────────────────
-
+// --- Build a multi-hop scatter route through the exit mesh ---
 circuit build_route(
     user_id: bytes(16),
     exit_ids: list<string>,
     exit_pubkeys: list<bytes(1568)>,
     signing_sk: bytes(4896),
 ) -> list<RouteNode>
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/route
     status production
     precision C
     povc true
@@ -201,11 +190,12 @@ circuit build_route(
     nodes
 }
 
+// --- Tear down a route and zero hop keys ---
 circuit teardown_route(
     route_nodes: list<string>,
     signing_sk: bytes(4896),
 ) -> bool
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/route
     status production
     precision C
     povc true
@@ -233,6 +223,7 @@ circuit teardown_route(
     true
 }
 
+// --- Reroute a single hop to a new exit ---
 circuit reroute_hop(
     route_id: string,
     old_exit_id: string,
@@ -240,7 +231,7 @@ circuit reroute_hop(
     new_exit_pubkey: bytes(1568),
     signing_sk: bytes(4896),
 ) -> RouteNode
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/route
     status production
     precision C
     povc true
@@ -282,10 +273,11 @@ circuit reroute_hop(
     updated
 }
 
+// --- Prove Merkle integrity of a route path ---
 circuit prove_route_integrity(
     route_nodes: list<string>,
 ) -> bytes(32)
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/route
     status production
     precision C
     povc true

@@ -1,16 +1,12 @@
-/// Poly VPN Scatter Routing — VRF-directed stream splitting across exits
-///
-/// Traffic is split into multiple streams via VRF so that no single exit
-/// node sees more than a fraction of the user's traffic. Cover streams
-/// maintain constant aggregate bandwidth to resist traffic analysis.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN Scatter Routing — VRF-directed stream splitting across exits (v0.11.0)
+//
+// Traffic is split into multiple streams via VRF so that no single exit
+// node sees more than a fraction of the user's traffic. Cover streams
+// maintain constant aggregate bandwidth to resist traffic analysis.
 
-import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
+import polykit_metering
 
-// ── Types ────────────────────────────────────────────────────────
-
-type ScatterConfig = struct {
+data ScatterConfig : vpn v1 {
     user_id: bytes(16),
     num_exits: u8,
     cover_streams: u8,
@@ -18,6 +14,13 @@ type ScatterConfig = struct {
     rebalance_interval_ms: u64,
     vrf_seed: bytes(32),
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/scatter
+    cortex {
+        obfuscate [user_id, vrf_seed]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
 
 type StreamSplit = struct {
     stream_id: bytes(16),
@@ -28,13 +31,19 @@ type StreamSplit = struct {
     vrf_proof: bytes(64),
 }
 
-type ExitAllocation = struct {
+data ExitAllocation : vpn v1 {
     allocations: list<StreamSplit>,
     total_exits: u8,
     cover_exits: u8,
     effective_bandwidth_mbps: u32,
     created_at: u64,
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/scatter
+    cortex {
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
 
 type ReassembledStream = struct {
     sequence: u64,
@@ -43,22 +52,27 @@ type ReassembledStream = struct {
     integrity_hash: bytes(32),
 }
 
-// ── Circuits ─────────────────────────────────────────────────────
+stream scatter_events: event<ExitAllocation>
+    | throttle 500/s burst 1000
+    retention 90d
+    consumers [streamsight, audit_trail]
 
+// --- Split a packet across allocated exit streams ---
 circuit split_stream(
     config: ScatterConfig,
     packet: bytes,
     allocation: ExitAllocation,
 ) -> list<(bytes(16), bytes)>
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles, bandwidth]
+    lex esn/global/org/polylabs/vpn/scatter
+    precision C
     observe metrics: [streams_split, split_latency_ns, packets_scattered]
     invariant "min_exits" { config.num_exits >= 2 }
     invariant "weight_sum_100" { sum(allocation.allocations.*.weight_pct) == 100 }
     invariant "packet_nonempty" { len(packet) > 0 }
-    wasm_abi [csprng]
     monitor "scatter_split_rate" { streams_split < 1000/s }
+    meters [compute_cycles, bandwidth]
+    wasm_abi [csprng]
     test golden "split_stream_basic" {
         let cfg = ScatterConfig {
             user_id: bytes(16, 0x01), num_exits: 3, cover_streams: 1,
@@ -96,6 +110,7 @@ circuit split_stream(
     fragments
 }
 
+// --- Compute VRF-weighted exit allocation ---
 circuit allocate_exits(
     config: ScatterConfig,
     available_exits: list<bytes(16)>,
@@ -103,11 +118,12 @@ circuit allocate_exits(
     loads: list<u8>,
 ) -> ExitAllocation
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles]
+    lex esn/global/org/polylabs/vpn/scatter
+    precision C
     observe metrics: [allocations_computed, exits_selected]
     invariant "enough_exits" { len(available_exits) >= config.num_exits + config.cover_streams }
     invariant "arrays_match" { len(available_exits) == len(latencies) }
+    meters [compute_cycles]
     wasm_abi [now, csprng]
 {
     let ts = now_ns() / 1000000
@@ -138,24 +154,29 @@ circuit allocate_exits(
         }
     }
 
-    ExitAllocation {
+    let result = ExitAllocation {
         allocations: allocations,
         total_exits: total,
         cover_exits: config.cover_streams,
         effective_bandwidth_mbps: config.total_bandwidth_mbps,
         created_at: ts,
     }
+
+    emit(scatter_events, result)
+    result
 }
 
+// --- Reassemble fragments from multiple exit streams ---
 circuit reassemble_stream(
     fragments: list<(u8, bytes)>,
     expected_count: u8,
 ) -> ReassembledStream
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles, bandwidth]
+    lex esn/global/org/polylabs/vpn/scatter
+    precision C
     observe metrics: [streams_reassembled, reassembly_latency_ns, fragments_processed]
     invariant "all_fragments" { len(fragments) == expected_count }
+    meters [compute_cycles, bandwidth]
     wasm_abi [now]
     kat_vector "sha3_256_integrity" {
         input: bytes(256, 0xAA)
@@ -175,14 +196,17 @@ circuit reassemble_stream(
     }
 }
 
+// --- Verify scatter allocation coverage invariants ---
 circuit verify_coverage(
     allocation: ExitAllocation,
     config: ScatterConfig,
 ) -> bool
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/scatter
+    precision C
     observe metrics: [coverage_checks, coverage_failures]
     invariant "has_allocations" { len(allocation.allocations) > 0 }
+    meters [compute_cycles]
 {
     let real_count = 0
     let cover_count = 0

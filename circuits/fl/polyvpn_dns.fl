@@ -1,15 +1,11 @@
-/// Poly VPN DNS Protection — DNS-over-eStream with ad/tracker blocking
-///
-/// All DNS queries are PQ-encrypted and scatter-routed through the
-/// tunnel. No single DNS resolver sees all queries. Blocklists for
-/// ads, trackers, and malware are enforced client-side before queries
-/// leave the device.
-///
-/// govern lex esn/global/org/polylabs/vpn
+// Poly VPN DNS Protection — DNS-over-eStream with ad/tracker blocking (v0.11.0)
+//
+// All DNS queries are PQ-encrypted and scatter-routed through the
+// tunnel. No single DNS resolver sees all queries. Blocklists for
+// ads, trackers, and malware are enforced client-side before queries
+// leave the device.
 
-import polykit_metering from "../../polykit/circuits/fl/polykit_metering.fl"
-
-// ── Types ────────────────────────────────────────────────────────
+import polykit_metering
 
 type DnsRecordType = enum {
     A,
@@ -22,7 +18,7 @@ type DnsRecordType = enum {
     SOA,
 }
 
-type DnsQuery = struct {
+data DnsQuery : vpn v1 {
     query_id: bytes(16),
     domain: string,
     record_type: DnsRecordType,
@@ -30,6 +26,13 @@ type DnsQuery = struct {
     timestamp_ms: u64,
     scatter_exit_id: bytes(16),
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/dns
+    cortex {
+        obfuscate [user_id, scatter_exit_id]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
 
 type DnsRecord = struct {
     domain: string,
@@ -38,7 +41,7 @@ type DnsRecord = struct {
     ttl_seconds: u32,
 }
 
-type DnsResponse = struct {
+data DnsResponse : vpn v1 {
     query_id: bytes(16),
     records: list<DnsRecord>,
     resolved_via: bytes(16),
@@ -47,6 +50,13 @@ type DnsResponse = struct {
     blocked: bool,
     block_reason: string,
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/dns
+    cortex {
+        obfuscate [resolved_via]
+        infer on_write
+        on_anomaly alert "vpn-team"
+    }
 
 type BlocklistEntry = struct {
     domain_hash: bytes(32),
@@ -64,15 +74,29 @@ type BlockCategory = enum {
     Custom,
 }
 
-type DnsCache = struct {
+data DnsCache : vpn v1 {
     domain_hash: bytes(32),
     records: list<DnsRecord>,
     cached_at: u64,
     expires_at: u64,
 }
+    store kv
+    govern lex esn/global/org/polylabs/vpn/dns
+    cortex {
+        infer on_write
+    }
 
-// ── Circuits ─────────────────────────────────────────────────────
+stream dns_query_events: event<DnsQuery>
+    | throttle 5000/s burst 10000
+    retention 90d
+    consumers [streamsight, audit_trail]
 
+stream dns_block_events: event<DnsResponse>
+    | throttle 1000/s burst 2000
+    retention 365d
+    consumers [streamsight, governance]
+
+// --- Resolve DNS query through PQ-encrypted scatter tunnel ---
 circuit resolve_dns(
     user_id: bytes(16),
     domain: string,
@@ -81,11 +105,12 @@ circuit resolve_dns(
     tunnel_key: bytes(32),
 ) -> DnsResponse
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles, bandwidth]
+    lex esn/global/org/polylabs/vpn/dns
+    precision C
     observe metrics: [dns_queries, dns_latency_ms, cache_hits, blocked_queries]
     monitor "dns_latency" { dns_latency_ms < 100 }
     invariant "domain_nonempty" { len(domain) > 0 }
+    meters [compute_cycles, bandwidth]
     wasm_abi [now, csprng, dns_upstream]
     test golden "resolve_dns_basic" {
         let uid = bytes(16, 0x01)
@@ -119,7 +144,7 @@ circuit resolve_dns(
 
     let blocked = check_blocklist(domain)
     if blocked.is_blocked {
-        return DnsResponse {
+        let resp = DnsResponse {
             query_id: query_id,
             records: [],
             resolved_via: zero(16),
@@ -128,6 +153,8 @@ circuit resolve_dns(
             blocked: true,
             block_reason: blocked.reason,
         }
+        emit(dns_block_events, resp)
+        return resp
     }
 
     let query = DnsQuery {
@@ -138,6 +165,7 @@ circuit resolve_dns(
         timestamp_ms: ts,
         scatter_exit_id: exit_id,
     }
+    emit(dns_query_events, query)
 
     let encrypted_query = encrypt_query(query, tunnel_key)
     let raw_response = dns_upstream(encrypted_query, exit_id)
@@ -157,14 +185,16 @@ circuit resolve_dns(
     }
 }
 
+// --- Check domain against local blocklists ---
 circuit check_blocklist(
     domain: string,
 ) -> (bool, string)
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles]
+    lex esn/global/org/polylabs/vpn/dns
+    precision C
     observe metrics: [blocklist_lookups, blocklist_hits]
     invariant "domain_present" { len(domain) > 0 }
+    meters [compute_cycles]
 {
     let domain_hash = sha3_256(domain)
     let parts = split(domain, ".")
@@ -181,15 +211,17 @@ circuit check_blocklist(
     (false, "")
 }
 
+// --- Cache a DNS response in local ESLite ---
 circuit cache_response(
     domain: string,
     records: list<DnsRecord>,
     ttl_override: u32,
 ) -> DnsCache
     profile poly_framework_standard
-    lex esn/global/org/polylabs/vpn
-    meters [compute_cycles, storage]
+    lex esn/global/org/polylabs/vpn/dns
+    precision C
     observe metrics: [cache_stores, cache_evictions]
+    meters [compute_cycles, storage]
     wasm_abi [now, eslite_insert]
 {
     let ts = now_ns() / 1000000
@@ -209,16 +241,18 @@ circuit cache_response(
     entry
 }
 
+// --- Encrypt a DNS query for scatter transport ---
 circuit encrypt_query(
     query: DnsQuery,
     tunnel_key: bytes(32),
 ) -> bytes
     profile poly_framework_sensitive
-    lex esn/global/org/polylabs/vpn
+    lex esn/global/org/polylabs/vpn/dns
+    precision C
     constant_time true
-    meters [compute_cycles]
     observe metrics: [queries_encrypted]
     invariant "key_nonzero" { tunnel_key != zero(32) }
+    meters [compute_cycles]
     wasm_abi [csprng]
     kat_vector "aes_gcm_encrypt_dns_query" {
         key: bytes(32, 0xAA)
