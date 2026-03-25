@@ -86,7 +86,7 @@ circuit vpn_platform_health(
     property liveness "eventually_healthy" { eventually(all_healthy == true) }
     monitor "tunnel_latency" { tunnel_latency_avg_ms < 200 }
     @serialize "verify/vpn_health.esz"
-    li_feed full_escir true, optimized_ir true, optimization_metadata true
+    li_feed full_flir true, optimized_ir true, optimization_metadata true
     meters [compute_cycles]
     fuzz_target
     test golden "healthy_platform" {

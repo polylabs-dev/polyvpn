@@ -10,9 +10,9 @@ id = "polylabs-dev"
 name = "Poly Labs"
 signing_key_id = "polylabs-prime-v1"
 
-[escir]
-api_version = "0.9.1"
-min_platform_version = "0.9.0"
+[flir]
+api_version = "0.22.0"
+min_platform_version = "0.22.0"
 
 [dependencies]
 polykit = ">=0.2.0"

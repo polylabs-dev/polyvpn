@@ -4,7 +4,7 @@
 **Date**: February 2026
 **Platform**: eStream v0.9.1
 **Upstream**: PolyKit v0.3.0, eStream graph/DAG constructs
-**Build Pipeline**: FastLang (.fl) → ESCIR → Rust/WASM codegen → .escd
+**Build Pipeline**: FastLang (.fl) → FLIR → Rust/WASM codegen → .escd
 
 ---
 
@@ -19,7 +19,7 @@ Poly VPN is a post-quantum encrypted, scatter-routed VPN. Traffic is not funnele
 | Exit mesh | Custom topology | `graph vpn_exit_mesh` (mirrors `device_mesh.fl`) |
 | Routing | Custom scatter router | `dag tunnel_route` with typed overlays |
 | Exit selection | VRF random | `ai_feed exit_selection` (optimal multi-exit route) |
-| Circuit format | ESCIR YAML (`circuit.escir.yaml`) | FastLang `.fl` with PolyKit profiles |
+| Circuit format | FLIR YAML (`circuit.flir.yaml`) | FastLang `.fl` with PolyKit profiles |
 | RBAC | Per-circuit annotations | eStream `rbac.fl` composed via PolyKit |
 | Platform | eStream v0.8.1 | eStream v0.9.1 |
 
