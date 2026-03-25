@@ -1,12 +1,14 @@
 # Poly VPN
 
 **GitHub**: [polylabs-dev/polyvpn](https://github.com/polylabs-dev/polyvpn)
-**Platform**: eStream v0.11.0
+**Platform**: eStream v0.22.0
 **Depends on**: PolyKit, eStream graph/DAG constructs
+
+100% FastLang. No hand-written Rust.
 
 ## Purpose
 
-Post-quantum encrypted, scatter-routed VPN with traffic mimicry. Traffic is split across multiple exit nodes simultaneously — no single exit sees the complete picture. All crypto in Rust/WASM; TypeScript is DOM-only.
+Post-quantum encrypted, scatter-routed VPN with traffic mimicry. Traffic is split across multiple exit nodes simultaneously — no single exit sees the complete picture. All crypto compiled from FastLang via FLIR codegen.
 
 ## Zero-Linkage Privacy
 
@@ -16,12 +18,12 @@ HKDF context: `poly-vpn-v1`. User identities are completely isolated from all ot
 
 - `circuits/fl/` — FastLang circuit definitions (encrypt, scatter, mimicry, kill switch, DNS, metering, incognito, RBAC)
 - `circuits/fl/graphs/` — Graph/DAG constructs (vpn_exit_mesh, tunnel_route)
-- `estream.toml` — Platform v0.11.0 component manifest
-- `crates/` — Rust crates (poly-vpn-core, poly-exit-node, poly-vpn-platform)
+- `estream.toml` — Platform v0.22.0 component manifest
 - `apps/desktop/` — Tauri desktop (Mac, Win, Linux)
 - `apps/mobile/` — React Native + Rust FFI (iOS, Android)
-- `packages/` — TypeScript SDKs and console widgets
 - `docs/` — Architecture and design documents
+
+> **Note**: `crates/` and `packages/` are legacy scaffolding superseded by FLIR codegen. All logic lives in FastLang circuits.
 
 ## Key Graphs
 
@@ -31,12 +33,3 @@ HKDF context: `poly-vpn-v1`. User identities are completely isolated from all ot
 ## Commit Convention
 
 Commit to the GitHub issue or epic the work was done under.
-
-## Cross-Repo Coordination
-
-This repo is part of the [polylabs-dev](https://github.com/polylabs-dev) organization, coordinated through the **AI Toolkit hub** at `toddrooke/ai-toolkit/`.
-
-For cross-repo context, strategic priorities, and the master work queue:
-- `toddrooke/ai-toolkit/CLAUDE-CONTEXT.md` — org map and priorities
-- `toddrooke/ai-toolkit/scratch/BACKLOG.md` — master backlog
-- `toddrooke/ai-toolkit/repos/polylabs-dev.md` — this org's status summary
