@@ -1,0 +1,536 @@
+/// Spec: specs/POLYVPN_CE_APP_GRAPH_SPEC.md
+/// App Graph for PolyVPN — 11 ModuleNode definitions composing the
+/// PQ scatter-routed VPN into Backend and Shared partitions. Registers
+/// intra-graph REQUIRES edges, PolyKit/eStream bridge edges (incognito,
+/// scatter routing), and CE meaning/noise/SME edges for cognitive integration.
+///
+/// govern lex polylabs/polyvpn
+
+lex polylabs/polyvpn
+
+@target software
+@codegen_targets ["wasm", "rust"]
+
+import "core/deployment/module_stratum.fl" {
+    ModuleNode, ModuleEdge, InterAppEdge, CsrStorage,
+    CompilationReceipt, ResourceBudget8D, SemVer,
+    ModuleType, AperturePartition, ModuleState, RolloutState,
+    PersistencePolicy, OfflineCachePolicy, SLATier, EntitlementTier,
+    EnforcementMode, BridgeScope,
+    module_graph_add_module, module_graph_add_edge,
+    module_graph_add_bridge_edge,
+    EDGE_REQUIRES, EDGE_BRIDGE_TO,
+}
+
+import "polykit/circuits/fl/polykit_app_graph.fl" {
+    ProductGraphConfig, make_poly_module, add_poly_module,
+    add_poly_edge, add_poly_bridge_edge, add_poly_ce_edges,
+    find_poly_module_id,
+    EDGE_TYPE_REQUIRES, EDGE_TYPE_BRIDGE_TO,
+    EDGE_MEANING_SUPPORTS, EDGE_MEANING_ENRICHES,
+    EDGE_CONCEPT_ORGANIZES, EDGE_EXPERT_JUDGES,
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+const POLYVPN_VERSION_MAJOR: u32 = 0
+const POLYVPN_VERSION_MINOR: u32 = 1
+const POLYVPN_VERSION_PATCH: u32 = 0
+const POLYVPN_APP_LEX: string = "polylabs/polyvpn"
+const POLYVPN_VERSION_STR: string = "0.1.0"
+const POLYVPN_MODULE_COUNT: u64 = 11
+
+// ── Product Config ─────────────────────────────────────────────────────────────
+
+circuit polyvpn_product_config() -> ProductGraphConfig
+    lex polylabs/polyvpn
+    @status production
+    @precision D
+{
+    ProductGraphConfig {
+        product_name: "polyvpn",
+        product_lex: POLYVPN_APP_LEX,
+        version_major: POLYVPN_VERSION_MAJOR,
+        version_minor: POLYVPN_VERSION_MINOR,
+        version_patch: POLYVPN_VERSION_PATCH,
+        module_count: POLYVPN_MODULE_COUNT as u32,
+        entitlement_tier: EntitlementTier::Free as u8,
+        sla_tier: SLATier::Premium as u8,
+    }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+circuit make_polyvpn_module(
+    name: string,
+    partition: u8,
+    sla: u8,
+    budget: ResourceBudget8D
+) -> ModuleNode
+    lex polylabs/polyvpn
+    @status production
+    @precision C
+    observe metrics: [module_name, aperture_partition]
+    meters [compute_cycles]
+{
+    let cfg = polyvpn_product_config()
+    let ver = SemVer {
+        major: POLYVPN_VERSION_MAJOR,
+        minor: POLYVPN_VERSION_MINOR,
+        patch: POLYVPN_VERSION_PATCH,
+        pre_release: "",
+    }
+    let receipt = CompilationReceipt {
+        source_hash: bytes(32, 0x00),
+        compiler_version: ver,
+        output_hash: bytes(32, 0x00),
+        prime_device_id: None,
+        compilation_timestamp: 0,
+        reproducible_verified: false,
+        receipt_signature: bytes(4627, 0x00),
+    }
+
+    ModuleNode {
+        name: name,
+        version_major: POLYVPN_VERSION_MAJOR,
+        version_minor: POLYVPN_VERSION_MINOR,
+        version_patch: POLYVPN_VERSION_PATCH,
+        version_pre: "",
+        module_type: ModuleType::SmartCircuit as u8,
+        content_hash: bytes(32, 0x00),
+        signature_chain: bytes(0),
+        aperture_partition: partition,
+        role_set: ["User", "Admin", "FamilyMember"],
+        required_entitlement: EntitlementTier::Free as u8,
+        classification_domains: [],
+        max_classification_level: 0,
+        compilation_receipt: receipt,
+        source_hash: bytes(32, 0x00),
+        compiler_version_major: POLYVPN_VERSION_MAJOR,
+        compiler_version_minor: POLYVPN_VERSION_MINOR,
+        prime_device_id: bytes(0),
+        reproducible_verified: false,
+        resource_budget: budget,
+        budget_enforcement_mode: EnforcementMode::Hard as u8,
+        state: ModuleState::Active as u8,
+        rollout_state: RolloutState::Canary as u8,
+        canary_target: None,
+        persistence: PersistencePolicy::Persistent as u8,
+        offline_cache_policy: OfflineCachePolicy::CacheAndVerify as u8,
+        max_staleness_seconds: 3600,
+        sla_tier: sla,
+        preferred_locality: "edge",
+        created_at_ms: 0,
+        updated_at_ms: 0,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Module Definitions — 11 ModuleNodes
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── polyvpn_dns ── PQ-encrypted DNS, DoH/DoT, leak prevention ───────────────
+
+circuit polyvpn_dns_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_dns", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 120000, hash_ops: 3000, bandwidth: 40000,
+            storage: 20000, observe_events: 6000, proofs: 80,
+            consensus: 20, memory: 16777216,
+        })
+}
+
+// ── polyvpn_encrypt ── ML-KEM tunnel encryption, forward secrecy ────────────
+
+circuit polyvpn_encrypt_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_encrypt", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 350000, hash_ops: 10000, bandwidth: 80000,
+            storage: 40000, observe_events: 10000, proofs: 200,
+            consensus: 50, memory: 67108864,
+        })
+}
+
+// ── polyvpn_incognito ── Ephemeral SPARK, session unlinkability ─────────────
+
+circuit polyvpn_incognito_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_incognito", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 150000, hash_ops: 6000, bandwidth: 15000,
+            storage: 10000, observe_events: 4000, proofs: 100,
+            consensus: 20, memory: 16777216,
+        })
+}
+
+// ── polyvpn_killswitch ── OS-level kill switch, crash recovery ──────────────
+
+circuit polyvpn_killswitch_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_killswitch", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 80000, hash_ops: 500, bandwidth: 5000,
+            storage: 10000, observe_events: 8000, proofs: 30,
+            consensus: 10, memory: 8388608,
+        })
+}
+
+// ── polyvpn_metering ── Per-tunnel bandwidth, hop count, tier enforcement ───
+
+circuit polyvpn_metering_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_metering", AperturePartition::Shared as u8,
+        SLATier::Standard as u8, ResourceBudget8D {
+            execution: 80000, hash_ops: 1000, bandwidth: 10000,
+            storage: 30000, observe_events: 6000, proofs: 30,
+            consensus: 10, memory: 8388608,
+        })
+}
+
+// ── polyvpn_mimicry ── Protocol camouflage, DPI evasion, timing jitter ──────
+
+circuit polyvpn_mimicry_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_mimicry", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 250000, hash_ops: 4000, bandwidth: 60000,
+            storage: 30000, observe_events: 12000, proofs: 100,
+            consensus: 30, memory: 33554432,
+        })
+}
+
+// ── polyvpn_platform_health ── Tunnel stability, relay availability ─────────
+
+circuit polyvpn_platform_health_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_platform_health", AperturePartition::Shared as u8,
+        SLATier::Standard as u8, ResourceBudget8D {
+            execution: 60000, hash_ops: 500, bandwidth: 8000,
+            storage: 15000, observe_events: 8000, proofs: 20,
+            consensus: 10, memory: 8388608,
+        })
+}
+
+// ── polyvpn_rbac ── Role-based access for users, families, enterprise ───────
+
+circuit polyvpn_rbac_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_rbac", AperturePartition::Shared as u8,
+        SLATier::Standard as u8, ResourceBudget8D {
+            execution: 80000, hash_ops: 1000, bandwidth: 10000,
+            storage: 20000, observe_events: 3000, proofs: 40,
+            consensus: 15, memory: 8388608,
+        })
+}
+
+// ── polyvpn_scatter ── Multi-hop relay, geographic diversity, k-of-n ────────
+
+circuit polyvpn_scatter_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("polyvpn_scatter", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 200000, hash_ops: 5000, bandwidth: 100000,
+            storage: 60000, observe_events: 10000, proofs: 120,
+            consensus: 40, memory: 33554432,
+        })
+}
+
+// ── exit_graph ── Exit node topology, capacity, trust, jurisdiction ─────────
+
+circuit polyvpn_exit_graph_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("exit_graph", AperturePartition::Backend as u8,
+        SLATier::Standard as u8, ResourceBudget8D {
+            execution: 120000, hash_ops: 3000, bandwidth: 25000,
+            storage: 80000, observe_events: 6000, proofs: 60,
+            consensus: 30, memory: 33554432,
+        })
+}
+
+// ── route_dag ── Multi-hop paths, latency weights, failover edges ───────────
+
+circuit polyvpn_route_dag_module() -> ModuleNode
+    lex polylabs/polyvpn  @status production  @precision B
+    observe metrics: [module_init]  meters [compute_cycles]
+{
+    make_polyvpn_module("route_dag", AperturePartition::Backend as u8,
+        SLATier::Premium as u8, ResourceBudget8D {
+            execution: 180000, hash_ops: 4000, bandwidth: 40000,
+            storage: 60000, observe_events: 8000, proofs: 80,
+            consensus: 30, memory: 33554432,
+        })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Graph Registration
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Register all 11 PolyVPN modules and their intra-graph REQUIRES
+/// dependency edges into the provided CsrStorage graph.
+circuit polyvpn_app_graph_register(
+    graph: CsrStorage
+) -> CsrStorage
+    lex polylabs/polyvpn
+    @status production
+    @precision B
+    @attested true
+    invariant "capacity" { graph.num_nodes + POLYVPN_MODULE_COUNT as u32 <= 4096 }
+    observe metrics: [registered_module_count, registered_edge_count]
+    meters [compute_cycles, memory_bytes]
+{
+    // ── Add all 11 modules ──────────────────────────────────────────────────
+    let (g, id_dns)             = module_graph_add_module(graph, polyvpn_dns_module())
+    let (g, id_encrypt)         = module_graph_add_module(g, polyvpn_encrypt_module())
+    let (g, id_incognito)       = module_graph_add_module(g, polyvpn_incognito_module())
+    let (g, id_killswitch)      = module_graph_add_module(g, polyvpn_killswitch_module())
+    let (g, id_metering)        = module_graph_add_module(g, polyvpn_metering_module())
+    let (g, id_mimicry)         = module_graph_add_module(g, polyvpn_mimicry_module())
+    let (g, id_platform_health) = module_graph_add_module(g, polyvpn_platform_health_module())
+    let (g, id_rbac)            = module_graph_add_module(g, polyvpn_rbac_module())
+    let (g, id_scatter)         = module_graph_add_module(g, polyvpn_scatter_module())
+    let (g, id_exit_graph)      = module_graph_add_module(g, polyvpn_exit_graph_module())
+    let (g, id_route_dag)       = module_graph_add_module(g, polyvpn_route_dag_module())
+
+    let vc = ">=" ++ POLYVPN_VERSION_STR
+
+    // ── Intra-graph REQUIRES edges ──────────────────────────────────────────
+    // scatter -> route_dag (multi-hop path selection)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_scatter",
+        source_version: POLYVPN_VERSION_STR, target_module: "route_dag",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_scatter, id_route_dag)
+
+    // scatter -> exit_graph (exit node selection)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_scatter",
+        source_version: POLYVPN_VERSION_STR, target_module: "exit_graph",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_scatter, id_exit_graph)
+
+    // scatter -> encrypt (per-hop onion encryption)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_scatter",
+        source_version: POLYVPN_VERSION_STR, target_module: "polyvpn_encrypt",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_scatter, id_encrypt)
+
+    // mimicry -> encrypt (camouflaged tunnel wrapping)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_mimicry",
+        source_version: POLYVPN_VERSION_STR, target_module: "polyvpn_encrypt",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_mimicry, id_encrypt)
+
+    // dns -> encrypt (encrypted DNS resolution)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_dns",
+        source_version: POLYVPN_VERSION_STR, target_module: "polyvpn_encrypt",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_dns, id_encrypt)
+
+    // incognito -> encrypt (ephemeral session establishment)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_incognito",
+        source_version: POLYVPN_VERSION_STR, target_module: "polyvpn_encrypt",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_incognito, id_encrypt)
+
+    // killswitch -> scatter (tunnel state monitoring)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_killswitch",
+        source_version: POLYVPN_VERSION_STR, target_module: "polyvpn_scatter",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_killswitch, id_scatter)
+
+    // metering -> scatter (relay hop accounting)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_metering",
+        source_version: POLYVPN_VERSION_STR, target_module: "polyvpn_scatter",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_metering, id_scatter)
+
+    // platform_health -> exit_graph (exit node health overlay)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_platform_health",
+        source_version: POLYVPN_VERSION_STR, target_module: "exit_graph",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_platform_health, id_exit_graph)
+
+    // platform_health -> route_dag (path health scoring)
+    let g = module_graph_add_edge(g, ModuleEdge {
+        edge_type: EDGE_REQUIRES, source_module: "polyvpn_platform_health",
+        source_version: POLYVPN_VERSION_STR, target_module: "route_dag",
+        target_version_constraint: vc, metadata: bytes(0),
+    }, id_platform_health, id_route_dag)
+
+    g
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Cross-Graph Bridge Edges — PolyKit + eStream
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Register EDGE_BRIDGE_TO edges linking PolyVPN's incognito module to
+/// PolyKit incognito and scatter module to eStream scatter routing.
+circuit polyvpn_register_bridge_edges(
+    graph: CsrStorage
+) -> CsrStorage
+    lex polylabs/polyvpn
+    @status production
+    @precision B
+    @attested true
+    observe metrics: [bridge_count]
+    meters [compute_cycles]
+{
+    let incognito_id = find_poly_module_id(graph, "polyvpn_incognito")
+    let scatter_id = find_poly_module_id(graph, "polyvpn_scatter")
+
+    let g = graph
+
+    // polyvpn_incognito -> PolyKit incognito bridge
+    if incognito_id != 0xFFFFFFFF as u32 {
+        let incognito_bridge = InterAppEdge {
+            edge_type: EDGE_BRIDGE_TO,
+            source_lex: POLYVPN_APP_LEX,
+            source_module: "polyvpn_incognito",
+            target_lex: "polylabs/polykit",
+            target_module: "polykit_incognito",
+            bridge_scope: BridgeScope::Platform as u8,
+            shared_fields: ["ephemeral_spark_id", "session_unlinkability_proof", "identity_rotation_schedule"],
+            redacted_fields: [],
+            bilateral_confirmed: false,
+        }
+        g = module_graph_add_bridge_edge(g, incognito_bridge, incognito_id)
+    }
+
+    // polyvpn_scatter -> eStream scatter routing bridge
+    if scatter_id != 0xFFFFFFFF as u32 {
+        let scatter_bridge = InterAppEdge {
+            edge_type: EDGE_BRIDGE_TO,
+            source_lex: POLYVPN_APP_LEX,
+            source_module: "polyvpn_scatter",
+            target_lex: "estream/scatter",
+            target_module: "scatter_routing",
+            bridge_scope: BridgeScope::Platform as u8,
+            shared_fields: ["route_dag_snapshot", "relay_health_vector", "hop_count"],
+            redacted_fields: [],
+            bilateral_confirmed: false,
+        }
+        g = module_graph_add_bridge_edge(g, scatter_bridge, scatter_id)
+    }
+
+    g
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Internal Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+
+circuit find_polyvpn_module_id(graph: CsrStorage, name: string) -> u32
+    lex polylabs/polyvpn
+    @status production
+    @precision D
+{
+    find_poly_module_id(graph, name)
+}
+
+// ── Metrics Store ──────────────────────────────────────────────────────────────
+
+store series polyvpn_app_graph_metrics
+    lex polylabs/polyvpn/metrics
+{
+    operation: string key
+    product_name: string
+    module_count: u32
+    edge_count: u32
+    bridge_count: u32
+    register_latency_ns: u64
+}
+
+// ── Golden Tests ───────────────────────────────────────────────────────────────
+
+test golden "polyvpn_app_graph_registers_11_modules" {
+    exec {
+        let g = graph_create()
+        let g = polyvpn_app_graph_register(g)
+    }
+    assert {
+        g.num_nodes == 11
+        g.num_edges == 10
+        find_poly_module_id(g, "polyvpn_dns") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_encrypt") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_incognito") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_killswitch") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_metering") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_mimicry") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_platform_health") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_rbac") != 0xFFFFFFFF
+        find_poly_module_id(g, "polyvpn_scatter") != 0xFFFFFFFF
+        find_poly_module_id(g, "exit_graph") != 0xFFFFFFFF
+        find_poly_module_id(g, "route_dag") != 0xFFFFFFFF
+    }
+}
+
+test golden "polyvpn_bridge_edges_connect_polykit_estream" {
+    exec {
+        let g = graph_create()
+        let g = polyvpn_app_graph_register(g)
+        let g = polyvpn_register_bridge_edges(g)
+    }
+    assert {
+        g.num_nodes == 11 + 2
+        let incognito_id = find_poly_module_id(g, "polyvpn_incognito")
+        incognito_id != 0xFFFFFFFF
+        let scatter_id = find_poly_module_id(g, "polyvpn_scatter")
+        scatter_id != 0xFFFFFFFF
+    }
+}
+
+test golden "make_polyvpn_module_creates_valid_node" {
+    let node = make_polyvpn_module("polyvpn_test",
+        AperturePartition::Backend as u8,
+        SLATier::Standard as u8,
+        ResourceBudget8D {
+            execution: 5000, hash_ops: 200, bandwidth: 2000,
+            storage: 1000, observe_events: 100, proofs: 10,
+            consensus: 5, memory: 4096,
+        })
+    assert node.name == "polyvpn_test"
+    assert node.version_major == POLYVPN_VERSION_MAJOR
+    assert node.version_minor == POLYVPN_VERSION_MINOR
+    assert node.resource_budget.execution == 5000
+    assert node.state == ModuleState::Active as u8
+    assert node.sla_tier == SLATier::Standard as u8
+}
+
+// ── Extern ─────────────────────────────────────────────────────────────────────
+
+extern "rust" {
+    #[module = "estream_runtime"]
+    #[api = "graph"]
+    #[state = "os"]
+    fn graph_create() -> CsrStorage
+}

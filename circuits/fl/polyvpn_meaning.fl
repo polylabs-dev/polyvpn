@@ -1,0 +1,244 @@
+/// Spec: specs/POLYVPN_CE_APP_GRAPH_SPEC.md §2-4
+/// CE Meaning Domains for PolyVPN — 3 meaning domains tracking tunnel
+/// health, censorship detection, and mimicry effectiveness. Includes
+/// noise filter with 4 suppression rules and 6 signal rules, plus
+/// 2 SME panels for network security and censorship evasion.
+
+lex polylabs/polyvpn
+
+@target software
+@codegen_targets ["wasm", "rust"]
+
+import "core/intelligence/ce_meaning.fl" {
+    MeaningDomain, NoiseRule, SignalRule, NoiseFilter,
+    SMEPanel, SMEPanelConfig, CERegistration,
+    ce_register_meaning_domain, ce_register_noise_filter,
+    ce_register_sme_panel,
+}
+
+// ── Constants ──────────────────────────────────────────────────────────────────
+
+const POLYVPN_CE_LEX: string = "polylabs/polyvpn"
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §1  Meaning Domains
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Tunnel latency, packet loss, reconnection events, and relay health.
+/// CE learns per-user network patterns to predict degradation and trigger
+/// proactive route failover.
+circuit network_tunnel_health_domain() -> MeaningDomain
+    lex polylabs/polyvpn
+    @status draft
+    @precision C
+{
+    MeaningDomain {
+        domain_id: "network/tunnel_health",
+        lex_namespace: POLYVPN_CE_LEX,
+        description: "Tunnel latency, packet loss, and relay health monitoring",
+        signals: [
+            "latency_spike_detected",
+            "packet_loss_threshold_breach",
+            "tunnel_reconnection_event",
+            "exit_node_capacity_breach",
+            "forward_secrecy_rotation_failure",
+        ],
+        retention_days: 30,
+        aggregation_window_ms: 60000,
+        min_confidence_bps: 7000,
+    }
+}
+
+/// Censorship block patterns, DPI evasion results, and DNS poisoning
+/// detection across jurisdictions. CE correlates events to distinguish
+/// targeted probes from broad censorship campaigns.
+circuit network_censorship_detection_domain() -> MeaningDomain
+    lex polylabs/polyvpn
+    @status draft
+    @precision C
+{
+    MeaningDomain {
+        domain_id: "network/censorship_detection",
+        lex_namespace: POLYVPN_CE_LEX,
+        description: "Censorship block patterns, DPI evasion, and DNS poisoning detection",
+        signals: [
+            "dpi_fingerprint_match",
+            "dns_poisoning_detected",
+            "tcp_rst_injection",
+            "protocol_block_pattern",
+            "geofence_restriction_event",
+        ],
+        retention_days: 90,
+        aggregation_window_ms: 300000,
+        min_confidence_bps: 8000,
+    }
+}
+
+/// Protocol camouflage success rate, timing jitter entropy, and traffic
+/// analysis resistance. CE calibrates mimicry profiles against real
+/// protocol baselines per jurisdiction.
+circuit network_mimicry_effectiveness_domain() -> MeaningDomain
+    lex polylabs/polyvpn
+    @status draft
+    @precision C
+{
+    MeaningDomain {
+        domain_id: "network/mimicry_effectiveness",
+        lex_namespace: POLYVPN_CE_LEX,
+        description: "Protocol camouflage success rate and traffic analysis resistance",
+        signals: [
+            "camouflage_success_rate",
+            "timing_jitter_entropy_score",
+            "protocol_shape_mismatch",
+            "bandwidth_fingerprint_anomaly",
+            "cover_traffic_ratio",
+        ],
+        retention_days: 60,
+        aggregation_window_ms: 3600000,
+        min_confidence_bps: 8500,
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §2  Noise Filter
+// ═══════════════════════════════════════════════════════════════════════════════
+
+circuit polyvpn_noise_filter() -> NoiseFilter
+    lex polylabs/polyvpn
+    @status draft
+    @precision C
+{
+    NoiseFilter {
+        lex_namespace: POLYVPN_CE_LEX,
+        suppression_rules: [
+            NoiseRule { pattern: "keepalive_packet", reason: "Periodic liveness probe — no user action or security meaning" },
+            NoiseRule { pattern: "dns_prefetch_speculative", reason: "Background optimization — not user-initiated" },
+            NoiseRule { pattern: "metering_counter_increment", reason: "Raw counter — aggregate in metering circuit, not CE" },
+            NoiseRule { pattern: "relay_health_ping_ack", reason: "Scatter topology protocol noise" },
+        ],
+        signal_rules: [
+            SignalRule { pattern: "tunnel_failure_killswitch_activation", action: "alert_network_security_panel" },
+            SignalRule { pattern: "censorship_event_dpi_dns_rst", action: "alert_censorship_evasion_panel" },
+            SignalRule { pattern: "mimicry_profile_detection", action: "mimicry_recalibration" },
+            SignalRule { pattern: "exit_node_capacity_breach", action: "exit_rebalance_recommendation" },
+            SignalRule { pattern: "forward_secrecy_rotation_failure", action: "alert_network_security_panel" },
+            SignalRule { pattern: "protocol_shape_block_pattern", action: "jurisdiction_mimicry_update" },
+        ],
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §3  SME Panels
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Network security posture: weighs cryptographic integrity against
+/// latency impact and user experience disruption.
+circuit network_security_panel() -> SMEPanel
+    lex polylabs/polyvpn
+    @status draft
+    @precision C
+{
+    SMEPanel {
+        panel_id: "polyvpn/network_security_posture",
+        lex_namespace: POLYVPN_CE_LEX,
+        trigger: "latency_sustained_200ms OR packet_loss_2pct OR fwd_secrecy_failure OR exit_trust_degradation",
+        config: SMEPanelConfig {
+            for_position: "Reroute immediately — cryptographic integrity and MITM risk",
+            against_position: "Degrade gracefully — latency impact, session disruption",
+            min_panelists: 2,
+            max_deliberation_ms: 15000,
+            confidence_threshold_bps: 7500,
+        },
+        output_fields: ["route_recommendation", "risk_score", "reroute_urgency"],
+    }
+}
+
+/// Censorship evasion: decides mimicry profile rotation urgency vs
+/// user session stability and bandwidth overhead.
+circuit censorship_evasion_panel() -> SMEPanel
+    lex polylabs/polyvpn
+    @status draft
+    @precision C
+{
+    SMEPanel {
+        panel_id: "polyvpn/censorship_evasion",
+        lex_namespace: POLYVPN_CE_LEX,
+        trigger: "dpi_fingerprint_match OR dns_poisoning_cluster OR tcp_rst_spike OR protocol_block_multi_user",
+        config: SMEPanelConfig {
+            for_position: "Rotate mimicry profile — protocol diversity, timing entropy",
+            against_position: "Maintain current profile — session continuity, bandwidth overhead",
+            min_panelists: 2,
+            max_deliberation_ms: 30000,
+            confidence_threshold_bps: 8000,
+        },
+        output_fields: ["event_classification", "mimicry_update_schedule", "jurisdiction_severity"],
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// §4  CE Registration Orchestrator
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Register all PolyVPN CE components: 3 meaning domains, noise filter,
+/// and 2 SME panels under the product lex namespace.
+circuit polyvpn_register_ce(product_lex: string) -> bool
+    lex polylabs/polyvpn
+    @status draft
+    @precision B
+    @attested true
+    observe metrics: [domains_registered, panels_registered]
+    meters [compute_cycles]
+{
+    let ok = true
+
+    let ok = ok && ce_register_meaning_domain(product_lex, network_tunnel_health_domain())
+    let ok = ok && ce_register_meaning_domain(product_lex, network_censorship_detection_domain())
+    let ok = ok && ce_register_meaning_domain(product_lex, network_mimicry_effectiveness_domain())
+
+    let ok = ok && ce_register_noise_filter(product_lex, polyvpn_noise_filter())
+
+    let ok = ok && ce_register_sme_panel(product_lex, network_security_panel())
+    let ok = ok && ce_register_sme_panel(product_lex, censorship_evasion_panel())
+
+    ok
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Golden Tests
+// ═══════════════════════════════════════════════════════════════════════════════
+
+#[test]
+circuit test_meaning_domains_valid()
+    lex polylabs/polyvpn
+{
+    let d1 = network_tunnel_health_domain()
+    let d2 = network_censorship_detection_domain()
+    let d3 = network_mimicry_effectiveness_domain()
+    assert d1.domain_id == "network/tunnel_health"
+    assert d2.domain_id == "network/censorship_detection"
+    assert d3.domain_id == "network/mimicry_effectiveness"
+    assert len(d1.signals) == 5
+    assert len(d2.signals) == 5
+    assert len(d3.signals) == 5
+}
+
+#[test]
+circuit test_noise_filter_counts()
+    lex polylabs/polyvpn
+{
+    let nf = polyvpn_noise_filter()
+    assert len(nf.suppression_rules) == 4, "expected 4 suppression rules"
+    assert len(nf.signal_rules) == 6, "expected 6 signal rules"
+}
+
+#[test]
+circuit test_sme_panels_configured()
+    lex polylabs/polyvpn
+{
+    let p1 = network_security_panel()
+    let p2 = censorship_evasion_panel()
+    assert p1.panel_id == "polyvpn/network_security_posture"
+    assert p2.panel_id == "polyvpn/censorship_evasion"
+    assert p1.config.min_panelists >= 2
+    assert p2.config.confidence_threshold_bps >= 7500
+}
