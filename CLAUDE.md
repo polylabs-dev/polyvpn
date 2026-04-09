@@ -1,8 +1,8 @@
-# Poly VPN
+# Q VPN
 
-**GitHub**: [polylabs-dev/polyvpn](https://github.com/polylabs-dev/polyvpn)
+**GitHub**: [polylabs-dev/qvpn](https://github.com/polylabs-dev/qvpn)
 **Platform**: eStream v0.22.0
-**Depends on**: PolyKit, eStream graph/DAG constructs
+**Depends on**: QKit, eStream graph/DAG constructs
 
 100% FastLang. No hand-written Rust.
 
@@ -12,7 +12,7 @@ Post-quantum encrypted, scatter-routed VPN with traffic mimicry. Traffic is spli
 
 ## Zero-Linkage Privacy
 
-HKDF context: `poly-vpn-v1`. User identities are completely isolated from all other Poly products. StreamSight telemetry stays within `polylabs.vpn.*` lex namespace. Metering under `polylabs.vpn.metering`. Billing via blinded tokens.
+HKDF context: `q-vpn-v1`. User identities are completely isolated from all other Q products. StreamSight telemetry stays within `polyqlabs.vpn.*` lex namespace. Metering under `polyqlabs.vpn.metering`. Billing via blinded tokens.
 
 ## Structure
 

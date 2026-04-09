@@ -1,8 +1,8 @@
-# Poly VPN - GitHub Issues
+# Q VPN - GitHub Issues
 
-> GitHub org: [polylabs-dev](https://github.com/polylabs-dev) | Domain: [polylabs.dev](https://polylabs.dev)
+> GitHub org: [polylabs-dev](https://github.com/polylabs-dev) | Domain: [polyqlabs.dev](https://polyqlabs.dev)
 
-## Epic 01: Poly VPN Core
+## Epic 01: Q VPN Core
 
 | # | Issue | Status | Priority |
 |---|-------|--------|----------|
@@ -24,7 +24,7 @@
 | 011 | Traffic mimicry profiles (trade secret) | Open | P1 |
 | 012 | Exit node health monitoring | Open | P1 |
 
-## Epic 03: Poly VPN Mobile + Enterprise
+## Epic 03: Q VPN Mobile + Enterprise
 
 | # | Issue | Status | Priority |
 |---|-------|--------|----------|

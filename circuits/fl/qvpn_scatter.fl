@@ -1,10 +1,10 @@
-// Poly VPN Scatter Routing — VRF-directed stream splitting across exits (v0.12.0)
+// Q VPN Scatter Routing — VRF-directed stream splitting across exits (v0.12.0)
 //
 // Traffic is split into multiple streams via VRF so that no single exit
 // node sees more than a fraction of the user's traffic. Cover streams
 // maintain constant aggregate bandwidth to resist traffic analysis.
 
-import polykit_metering
+import qkit_metering
 
 data ScatterConfig : vpn v1 {
     user_id: bytes(16),
@@ -15,7 +15,7 @@ data ScatterConfig : vpn v1 {
     vrf_seed: bytes(32),
 }
     store kv
-    govern lex global/org/polylabs/vpn/distribute
+    govern lex global/org/polyqlabs/vpn/distribute
     cortex {
         obfuscate [user_id, vrf_seed]
         infer on_write
@@ -39,7 +39,7 @@ data ExitAllocation : vpn v1 {
     created_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/distribute
+    govern lex global/org/polyqlabs/vpn/distribute
     cortex {
         infer on_write
         on_anomaly alert "vpn-team"
@@ -64,7 +64,7 @@ circuit split_stream(
     allocation: ExitAllocation,
 ) -> list<(bytes(16), bytes)>
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/distribute
+    lex global/org/polyqlabs/vpn/distribute
     @precision C
     @observe metrics: [streams_split, split_latency_ns, packets_scattered]
     invariant "min_exits" { config.num_exits >= 2 }
@@ -118,7 +118,7 @@ circuit allocate_exits(
     loads: list<u8>,
 ) -> ExitAllocation
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/distribute
+    lex global/org/polyqlabs/vpn/distribute
     @precision C
     @observe metrics: [allocations_computed, exits_selected]
     invariant "enough_exits" { len(available_exits) >= config.num_exits + config.cover_streams }
@@ -172,7 +172,7 @@ circuit reassemble_stream(
     expected_count: u8,
 ) -> ReassembledStream
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/distribute
+    lex global/org/polyqlabs/vpn/distribute
     @precision C
     @observe metrics: [streams_reassembled, reassembly_latency_ns, fragments_processed]
     invariant "all_fragments" { len(fragments) == expected_count }
@@ -202,7 +202,7 @@ circuit verify_coverage(
     config: ScatterConfig,
 ) -> bool
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/distribute
+    lex global/org/polyqlabs/vpn/distribute
     @precision C
     @observe metrics: [coverage_checks, coverage_failures]
     invariant "has_allocations" { len(allocation.allocations) > 0 }

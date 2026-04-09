@@ -1,8 +1,8 @@
 [test_suite]
-name = "polyvpn golden tests"
-circuit = "polyvpn_circuits"
+name = "qvpn golden tests"
+circuit = "qvpn_circuits"
 version = "0.1.0"
 
 [[vectors]]
-file = "polyvpn.esz"
+file = "qvpn.esz"
 tags = ["golden", "happy-path", "crypto", "telemetry-isolation"]

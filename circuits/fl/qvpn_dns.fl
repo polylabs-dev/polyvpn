@@ -1,11 +1,11 @@
-// Poly VPN DNS Protection — DNS-over-eStream with ad/tracker blocking (v0.12.0)
+// Q VPN DNS Protection — DNS-over-eStream with ad/tracker blocking (v0.12.0)
 //
 // All DNS queries are PQ-encrypted and distribute-routed through the
 // tunnel. No single DNS resolver sees all queries. Blocklists for
 // ads, trackers, and malware are enforced client-side before queries
 // leave the device.
 
-import polykit_metering
+import qkit_metering
 
 type DnsRecordType = enum {
     A,
@@ -27,7 +27,7 @@ data DnsQuery : vpn v1 {
     scatter_exit_id: bytes(16),
 }
     store kv
-    govern lex global/org/polylabs/vpn/dns
+    govern lex global/org/polyqlabs/vpn/dns
     cortex {
         obfuscate [user_id, scatter_exit_id]
         infer on_write
@@ -51,7 +51,7 @@ data DnsResponse : vpn v1 {
     block_reason: string,
 }
     store kv
-    govern lex global/org/polylabs/vpn/dns
+    govern lex global/org/polyqlabs/vpn/dns
     cortex {
         obfuscate [resolved_via]
         infer on_write
@@ -81,7 +81,7 @@ data DnsCache : vpn v1 {
     expires_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/dns
+    govern lex global/org/polyqlabs/vpn/dns
     cortex {
         infer on_write
     }
@@ -105,7 +105,7 @@ circuit resolve_dns(
     tunnel_key: bytes(32),
 ) -> DnsResponse
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/dns
+    lex global/org/polyqlabs/vpn/dns
     @precision C
     @observe metrics: [dns_queries, dns_latency_ms, cache_hits, blocked_queries]
     monitor "dns_latency" { dns_latency_ms < 100 }
@@ -190,7 +190,7 @@ circuit check_blocklist(
     domain: string,
 ) -> (bool, string)
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/dns
+    lex global/org/polyqlabs/vpn/dns
     @precision C
     @observe metrics: [blocklist_lookups, blocklist_hits]
     invariant "domain_present" { len(domain) > 0 }
@@ -218,7 +218,7 @@ circuit cache_response(
     ttl_override: u32,
 ) -> DnsCache
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/dns
+    lex global/org/polyqlabs/vpn/dns
     @precision C
     @observe metrics: [cache_stores, cache_evictions]
     meters [compute_cycles, storage]
@@ -247,7 +247,7 @@ circuit encrypt_query(
     tunnel_key: bytes(32),
 ) -> bytes
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/dns
+    lex global/org/polyqlabs/vpn/dns
     @precision C
     constant_time true
     @observe metrics: [queries_encrypted]

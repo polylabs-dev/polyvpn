@@ -4,10 +4,10 @@
 |-------|-------|
 | **Version** | v0.1.0 |
 | **Status** | Draft |
-| **Lex Namespace** | `polylabs/polyvpn` |
-| **App Graph** | `circuits/fl/polyvpn_app_graph.fl` |
-| **CE Meaning** | `circuits/fl/polyvpn_meaning.fl` |
-| **Upstream Dependency** | eStream v0.22.0+, PolyKit v0.1.0+ |
+| **Lex Namespace** | `polyqlabs/qvpn` |
+| **App Graph** | `circuits/fl/qvpn_app_graph.fl` |
+| **CE Meaning** | `circuits/fl/qvpn_meaning.fl` |
+| **Upstream Dependency** | eStream v0.22.0+, QKit v0.1.0+ |
 
 ---
 
@@ -17,15 +17,15 @@ PolyVPN comprises 11 modules (9 circuits + 2 graphs):
 
 | Module | Type | Description |
 |--------|------|-------------|
-| `polyvpn_dns` | Circuit | PQ-encrypted DNS resolution — DoH/DoT with ML-KEM-1024, DNS leak prevention, censorship-resistant resolvers |
-| `polyvpn_encrypt` | Circuit | Tunnel encryption — ML-KEM-1024 key exchange, AES-256-GCM/ChaCha20-Poly1305, per-packet nonce, forward secrecy rotation |
-| `polyvpn_incognito` | Circuit | Session unlinkability — ephemeral SPARK identities per tunnel, no cross-session correlation, IP leak prevention |
-| `polyvpn_killswitch` | Circuit | Kill switch enforcement — OS-level firewall rules, pre-connect blocking, IPv6 leak prevention, crash recovery auto-reconnect |
-| `polyvpn_metering` | Circuit | Usage metering — per-tunnel bandwidth, connection duration, relay hop count, tier enforcement |
-| `polyvpn_mimicry` | Circuit | Traffic mimicry engine — protocol camouflage (HTTPS, WebSocket, QUIC shapes), timing jitter injection, DPI evasion fingerprinting |
-| `polyvpn_platform_health` | Circuit | Platform health — tunnel stability metrics, relay node availability, latency percentile tracking, certificate rotation scheduling |
-| `polyvpn_rbac` | Circuit | Role-based access — personal user, family plan member, enterprise admin, network-only profiles |
-| `polyvpn_scatter` | Circuit | Scatter-routed tunneling — multi-hop relay selection, geographic diversity enforcement, k-of-n path redundancy |
+| `qvpn_dns` | Circuit | PQ-encrypted DNS resolution — DoH/DoT with ML-KEM-1024, DNS leak prevention, censorship-resistant resolvers |
+| `qvpn_encrypt` | Circuit | Tunnel encryption — ML-KEM-1024 key exchange, AES-256-GCM/ChaCha20-Poly1305, per-packet nonce, forward secrecy rotation |
+| `qvpn_incognito` | Circuit | Session unlinkability — ephemeral SPARK identities per tunnel, no cross-session correlation, IP leak prevention |
+| `qvpn_killswitch` | Circuit | Kill switch enforcement — OS-level firewall rules, pre-connect blocking, IPv6 leak prevention, crash recovery auto-reconnect |
+| `qvpn_metering` | Circuit | Usage metering — per-tunnel bandwidth, connection duration, relay hop count, tier enforcement |
+| `qvpn_mimicry` | Circuit | Traffic mimicry engine — protocol camouflage (HTTPS, WebSocket, QUIC shapes), timing jitter injection, DPI evasion fingerprinting |
+| `qvpn_platform_health` | Circuit | Platform health — tunnel stability metrics, relay node availability, latency percentile tracking, certificate rotation scheduling |
+| `qvpn_rbac` | Circuit | Role-based access — personal user, family plan member, enterprise admin, network-only profiles |
+| `qvpn_scatter` | Circuit | Scatter-routed tunneling — multi-hop relay selection, geographic diversity enforcement, k-of-n path redundancy |
 | `exit_graph` | Graph | Exit node topology graph — exit node locations, capacity, load, trust scores, jurisdiction metadata |
 | `route_dag` | Graph | Route selection DAG — multi-hop paths, latency weights, censorship bypass routes, failover edges |
 
@@ -39,11 +39,11 @@ Monitors tunnel stability and performance derived from latency measurements, pac
 
 | Signal | Source | Meaning |
 |--------|--------|---------|
-| Latency spike detected | `polyvpn_platform_health` | Tunnel degradation — route_dag failover candidate |
-| Packet loss exceeds threshold | `polyvpn_platform_health` | Relay node congestion or ISP throttling detected |
-| Tunnel reconnection event | `polyvpn_killswitch` | Connection drop — kill switch activated, auto-recovery in progress |
+| Latency spike detected | `qvpn_platform_health` | Tunnel degradation — route_dag failover candidate |
+| Packet loss exceeds threshold | `qvpn_platform_health` | Relay node congestion or ISP throttling detected |
+| Tunnel reconnection event | `qvpn_killswitch` | Connection drop — kill switch activated, auto-recovery in progress |
 | Exit node capacity breach | `exit_graph` | Exit node overloaded — rebalance to alternate exit |
-| Forward secrecy rotation failure | `polyvpn_encrypt` | Key rotation timeout — potential MITM or relay compromise |
+| Forward secrecy rotation failure | `qvpn_encrypt` | Key rotation timeout — potential MITM or relay compromise |
 
 ### 2.2 `network/censorship_detection`
 
@@ -51,10 +51,10 @@ Tracks censorship events, block patterns, and DPI evasion effectiveness across j
 
 | Signal | Source | Meaning |
 |--------|--------|---------|
-| DPI fingerprint match | `polyvpn_mimicry` | Deep packet inspection attempt detected — protocol switch required |
-| DNS poisoning detected | `polyvpn_dns` | Resolver returning spoofed records — failover to encrypted resolver |
-| TCP RST injection | `polyvpn_scatter` | Active connection termination by middlebox — reroute via alternate path |
-| Protocol block pattern | `polyvpn_mimicry` | Specific protocol shape blocked in jurisdiction — update mimicry profile |
+| DPI fingerprint match | `qvpn_mimicry` | Deep packet inspection attempt detected — protocol switch required |
+| DNS poisoning detected | `qvpn_dns` | Resolver returning spoofed records — failover to encrypted resolver |
+| TCP RST injection | `qvpn_scatter` | Active connection termination by middlebox — reroute via alternate path |
+| Protocol block pattern | `qvpn_mimicry` | Specific protocol shape blocked in jurisdiction — update mimicry profile |
 | Geofence restriction event | `exit_graph` | Exit node jurisdiction blocked — geographic rerouting triggered |
 
 ### 2.3 `network/mimicry_effectiveness`
@@ -63,11 +63,11 @@ Observes protocol camouflage success rates and traffic analysis resistance acros
 
 | Signal | Source | Meaning |
 |--------|--------|---------|
-| Camouflage success rate | `polyvpn_mimicry` | Percentage of sessions passing DPI without detection |
-| Timing jitter entropy score | `polyvpn_mimicry` | Statistical distinguishability of injected timing from genuine traffic |
-| Protocol shape mismatch | `polyvpn_mimicry` | Mimicry profile diverging from real protocol baseline — recalibration needed |
-| Bandwidth fingerprint anomaly | `polyvpn_scatter` | Traffic volume pattern reveals VPN usage — padding strategy adjustment |
-| Cover traffic ratio | `polyvpn_scatter` | Ratio of cover to real traffic — efficiency vs undetectability tradeoff |
+| Camouflage success rate | `qvpn_mimicry` | Percentage of sessions passing DPI without detection |
+| Timing jitter entropy score | `qvpn_mimicry` | Statistical distinguishability of injected timing from genuine traffic |
+| Protocol shape mismatch | `qvpn_mimicry` | Mimicry profile diverging from real protocol baseline — recalibration needed |
+| Bandwidth fingerprint anomaly | `qvpn_scatter` | Traffic volume pattern reveals VPN usage — padding strategy adjustment |
+| Cover traffic ratio | `qvpn_scatter` | Ratio of cover to real traffic — efficiency vs undetectability tradeoff |
 
 ---
 
@@ -121,19 +121,19 @@ Convenes on censorship events: DPI fingerprint match, DNS poisoning cluster, TCP
 
 ## 5. Bridge Edges
 
-### 5.1 PolyKit Incognito Bridge
+### 5.1 QKit Incognito Bridge
 
 | Direction | Shared Fields | Purpose |
 |-----------|---------------|---------|
-| `polyvpn` → `polykit/incognito` | `ephemeral_spark_id`, `session_unlinkability_proof`, `identity_rotation_schedule` | Session isolation — PolyKit incognito provides SPARK ephemeral identities consumed by VPN tunnel establishment |
-| `polykit/incognito` → `polyvpn` | `tunnel_session_token`, `exit_jurisdiction` | Tunnel metadata — PolyVPN informs incognito layer of active tunnel context for cross-product unlinkability enforcement |
+| `qvpn` → `qkit/incognito` | `ephemeral_spark_id`, `session_unlinkability_proof`, `identity_rotation_schedule` | Session isolation — QKit incognito provides SPARK ephemeral identities consumed by VPN tunnel establishment |
+| `qkit/incognito` → `qvpn` | `tunnel_session_token`, `exit_jurisdiction` | Tunnel metadata — PolyVPN informs incognito layer of active tunnel context for cross-product unlinkability enforcement |
 
 ### 5.2 eStream Scatter Routing Bridge
 
 | Direction | Shared Fields | Purpose |
 |-----------|---------------|---------|
-| `polyvpn` → `estream/scatter` | `route_dag_snapshot`, `relay_health_vector`, `hop_count` | Route coordination — PolyVPN shares relay topology with eStream scatter for platform-wide routing optimization |
-| `estream/scatter` → `polyvpn` | `scatter_node_capacity`, `geographic_diversity_map`, `trust_attestation` | Node discovery — eStream scatter provides relay node metadata for VPN path selection |
+| `qvpn` → `estream/scatter` | `route_dag_snapshot`, `relay_health_vector`, `hop_count` | Route coordination — PolyVPN shares relay topology with eStream scatter for platform-wide routing optimization |
+| `estream/scatter` → `qvpn` | `scatter_node_capacity`, `geographic_diversity_map`, `trust_attestation` | Node discovery — eStream scatter provides relay node metadata for VPN path selection |
 
 ---
 
@@ -155,13 +155,13 @@ Convenes on censorship events: DPI fingerprint match, DNS poisoning cluster, TCP
 | App Graph modules | 11 (9 circuits + 2 graphs) |
 | CE meaning domains | 3 |
 | SME panels | 2 |
-| Bridge edges | 2 (PolyKit incognito, eStream scatter) |
+| Bridge edges | 2 (QKit incognito, eStream scatter) |
 | **Total** | **11 modules** |
 
 ### Capability Inventory Update
 
 ```
-polyvpn: {
+qvpn: {
     modules: 11,
     circuits: 9,
     graphs: 2,

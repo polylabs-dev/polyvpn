@@ -1,7 +1,7 @@
-// Poly VPN Metering — Per-product 8D metering for VPN operations (v0.12.0)
+// Q VPN Metering — Per-product 8D metering for VPN operations (v0.12.0)
 //
-// Maps VPN operations to PolyKit metering dimensions.
-// Isolated under polylabs.vpn.metering lex — no cross-product aggregation.
+// Maps VPN operations to QKit metering dimensions.
+// Isolated under polyqlabs.vpn.metering lex — no cross-product aggregation.
 //
 // Operation          | Dimensions
 // -------------------|------------------------------------
@@ -11,7 +11,7 @@
 // distribute            | Bandwidth, Hashes
 // incognito          | Executions, Circuits, Hashes
 
-import polykit_metering
+import qkit_metering
 
 // --- Meter tunnel bandwidth and packet operations ---
 circuit meter_tunnel(
@@ -20,7 +20,7 @@ circuit meter_tunnel(
     packets: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/metering
+    lex global/org/polyqlabs/vpn/metering
     @precision C
     @observe metrics: [tunnel_metering_events]
     monitor "tunnel_metering_rate" { tunnel_metering_events < 5000/s }
@@ -31,7 +31,7 @@ circuit meter_tunnel(
         assert record != null
     }
 {
-    polykit_metering::record_usage(user_id, "vpn_tunnel", DimensionValues {
+    qkit_metering::record_usage(user_id, "vpn_tunnel", DimensionValues {
         executions: packets,
         hashes: packets,
         bandwidth: bytes_transferred,
@@ -50,12 +50,12 @@ circuit meter_dns(
     blocked: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/metering
+    lex global/org/polyqlabs/vpn/metering
     @precision C
     @observe metrics: [dns_metering_events]
     meters [compute_cycles]
 {
-    polykit_metering::record_usage(user_id, "vpn_dns", DimensionValues {
+    qkit_metering::record_usage(user_id, "vpn_dns", DimensionValues {
         executions: queries,
         hashes: 0,
         bandwidth: 0,
@@ -74,12 +74,12 @@ circuit meter_mimicry(
     profiles_applied: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/metering
+    lex global/org/polyqlabs/vpn/metering
     @precision C
     @observe metrics: [mimicry_metering_events]
     meters [compute_cycles]
 {
-    polykit_metering::record_usage(user_id, "vpn_mimicry", DimensionValues {
+    qkit_metering::record_usage(user_id, "vpn_mimicry", DimensionValues {
         executions: packets_shaped,
         hashes: 0,
         bandwidth: 0,
@@ -98,12 +98,12 @@ circuit meter_scatter(
     fragments: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/metering
+    lex global/org/polyqlabs/vpn/metering
     @precision C
     @observe metrics: [scatter_metering_events]
     meters [compute_cycles]
 {
-    polykit_metering::record_usage(user_id, "vpn_scatter", DimensionValues {
+    qkit_metering::record_usage(user_id, "vpn_scatter", DimensionValues {
         executions: 0,
         hashes: fragments,
         bandwidth: bytes_scattered,
@@ -122,12 +122,12 @@ circuit meter_incognito(
     profile_switches: u64,
 ) -> MeteringRecord
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/metering
+    lex global/org/polyqlabs/vpn/metering
     @precision C
     @observe metrics: [incognito_metering_events]
     meters [compute_cycles]
 {
-    polykit_metering::record_usage(user_id, "vpn_incognito", DimensionValues {
+    qkit_metering::record_usage(user_id, "vpn_incognito", DimensionValues {
         executions: sessions_activated,
         hashes: sessions_activated,
         bandwidth: 0,
@@ -146,11 +146,11 @@ circuit check_vpn_limits(
     tier_limits: TierLimits,
 ) -> list<MeteringDimension>
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/metering
+    lex global/org/polyqlabs/vpn/metering
     @precision C
     @observe metrics: [limit_checks, limit_violations]
     meters [compute_cycles]
 {
-    let current = polykit_metering::get_usage_summary(user_id)
-    polykit_metering::check_limits(current, tier_limits)
+    let current = qkit_metering::get_usage_summary(user_id)
+    qkit_metering::check_limits(current, tier_limits)
 }

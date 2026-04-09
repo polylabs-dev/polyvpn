@@ -1,15 +1,15 @@
-// Poly VPN Platform Health — Blind relay pattern health monitoring (v0.12.0)
+// Q VPN Platform Health — Blind relay pattern health monitoring (v0.12.0)
 //
 // Aggregates tunnel-operation metrics through blinded, cohort-enforced telemetry.
-// Stratum: kv store + lex governance under esn/global/org/polylabs/vpn.
+// Stratum: kv store + lex governance under esn/global/org/polyqlabs/vpn.
 // Cortex: obfuscation, write-time inference, anomaly alerting to vpn-team.
 //
 // Zero-linkage: HKDF("poly-vpn-telemetry-v1") isolates all identity.
 // No tunnel endpoints, traffic content, or routing paths ever reach StreamSight.
 // Traffic mimicry must maintain >=95% coverage at all times.
 
-import polykit_blind_telemetry
-import polykit_metering
+import qkit_blind_telemetry
+import qkit_metering
 
 data PlatformMetrics : vpn v1 {
     blinded_user_id: bytes(32),
@@ -29,7 +29,7 @@ data PlatformMetrics : vpn v1 {
     collected_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn
+    govern lex global/org/polyqlabs/vpn
     cortex {
         obfuscate [blinded_user_id, anomaly_score, tunnel_latency_avg_ms]
         infer on_write
@@ -71,7 +71,7 @@ circuit vpn_platform_health(
     jurisdiction_diversity: u64,
 ) -> PlatformMetrics
     profile poly_framework_standard
-    lex global/org/polylabs/vpn {
+    lex global/org/polyqlabs/vpn {
         governance hierarchical
         audit_trail true
         sub_lex tunnel fan_in
@@ -117,9 +117,9 @@ circuit vpn_platform_health(
 {
     let ts = now_ns() / 1000000
 
-    let blinded = polykit_blind_telemetry::blind_user_id(spark_id, "poly-vpn-telemetry-v1")
+    let blinded = qkit_blind_telemetry::blind_user_id(spark_id, "poly-vpn-telemetry-v1")
 
-    let (cohort_status, cohort_ok) = polykit_blind_telemetry::enforce_cohort(active_user_count, 50)
+    let (cohort_status, cohort_ok) = qkit_blind_telemetry::enforce_cohort(active_user_count, 50)
 
     let latency_baseline = streamsight_baseline("tunnel_latency_avg_ms", 3600000)
     let current_deviation = if latency_baseline > 0 {
@@ -196,7 +196,7 @@ circuit vpn_anomaly_check(
     window_ms: u64,
 ) -> (HealthStatus, f64, string)
     profile poly_framework_standard
-    lex global/org/polylabs/vpn {
+    lex global/org/polyqlabs/vpn {
         governance hierarchical
         audit_trail true
     }

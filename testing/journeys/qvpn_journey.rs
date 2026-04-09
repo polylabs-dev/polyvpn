@@ -11,7 +11,7 @@ pub struct PolyvpnJourney;
 
 impl Journey for PolyvpnJourney {
     fn name(&self) -> &str {
-        "polyvpn_e2e"
+        "qvpn_e2e"
     }
 
     fn description(&self) -> &str {
@@ -21,13 +21,13 @@ impl Journey for PolyvpnJourney {
     fn parties(&self) -> Vec<JourneyParty> {
         vec![
             JourneyParty::new("alice")
-                .with_spark_context("poly-vpn-v1")
+                .with_spark_context("q-vpn-v1")
                 .with_role("client"),
             JourneyParty::new("bob")
-                .with_spark_context("poly-vpn-v1")
+                .with_spark_context("q-vpn-v1")
                 .with_role("exit_node"),
             JourneyParty::new("charlie")
-                .with_spark_context("poly-vpn-v1")
+                .with_spark_context("q-vpn-v1")
                 .with_role("relay_node"),
         ]
     }
@@ -38,7 +38,7 @@ impl Journey for PolyvpnJourney {
             JourneyStep::new("alice_connects_tunnel")
                 .party("alice")
                 .action(StepAction::Execute(|ctx: &mut ConvoyContext| {
-                    let tunnel = ctx.polyvpn().connect(TunnelConfig {
+                    let tunnel = ctx.qvpn().connect(TunnelConfig {
                         kem_algo: "ml-kem-1024",
                         min_hops: 3,
                         jurisdiction_exclude: vec!["FVEY"],
@@ -53,12 +53,12 @@ impl Journey for PolyvpnJourney {
                     assert!(tunnel.hop_count >= 3);
                     assert!(tunnel.pq_handshake_complete);
 
-                    assert_metric_emitted!(ctx, "polyvpn.tunnel.connected", {
+                    assert_metric_emitted!(ctx, "qvpn.tunnel.connected", {
                         "kem_algo" => "ml-kem-1024",
                         "hop_count" => &tunnel.hop_count.to_string(),
                     });
 
-                    assert_povc_witness!(ctx, "polyvpn.tunnel.connect", {
+                    assert_povc_witness!(ctx, "qvpn.tunnel.connect", {
                         witness_type: "tunnel_establishment",
                         tunnel_id: &tunnel.id,
                     });
@@ -74,7 +74,7 @@ impl Journey for PolyvpnJourney {
                 .action(StepAction::Execute(|ctx: &mut ConvoyContext| {
                     let tunnel_id = ctx.get::<String>("tunnel_id");
 
-                    let mimicry = ctx.polyvpn().activate_mimicry(
+                    let mimicry = ctx.qvpn().activate_mimicry(
                         &tunnel_id,
                         MimicryProfile::Https,
                     )?;
@@ -83,7 +83,7 @@ impl Journey for PolyvpnJourney {
                     assert_eq!(mimicry.profile, MimicryProfile::Https);
                     assert!(mimicry.tls_fingerprint_matches);
 
-                    let analysis = ctx.polyvpn().analyze_traffic_pattern(&tunnel_id)?;
+                    let analysis = ctx.qvpn().analyze_traffic_pattern(&tunnel_id)?;
                     assert!(
                         !analysis.vpn_detectable,
                         "Traffic must be indistinguishable from HTTPS"
@@ -91,12 +91,12 @@ impl Journey for PolyvpnJourney {
                     assert!(analysis.packet_size_variance_low);
                     assert!(analysis.timing_mimics_browser);
 
-                    assert_metric_emitted!(ctx, "polyvpn.mimicry.activated", {
+                    assert_metric_emitted!(ctx, "qvpn.mimicry.activated", {
                         "profile" => "https",
                         "detectable" => "false",
                     });
 
-                    assert_blinded!(ctx, "polyvpn.mimicry.activated", {
+                    assert_blinded!(ctx, "qvpn.mimicry.activated", {
                         field: "client_ip",
                         blinding: "absent",
                     });
@@ -112,7 +112,7 @@ impl Journey for PolyvpnJourney {
                 .action(StepAction::Execute(|ctx: &mut ConvoyContext| {
                     let tunnel_id = ctx.get::<String>("tunnel_id");
 
-                    let dns_result = ctx.polyvpn().resolve_dns(
+                    let dns_result = ctx.qvpn().resolve_dns(
                         &tunnel_id,
                         "example.com",
                     )?;
@@ -126,17 +126,17 @@ impl Journey for PolyvpnJourney {
                     // DNS must not leak to ISP
                     assert!(dns_result.isp_visible_queries == 0);
 
-                    assert_metric_emitted!(ctx, "polyvpn.dns.resolved", {
+                    assert_metric_emitted!(ctx, "qvpn.dns.resolved", {
                         "encrypted" => "true",
                         "scatter_routed" => "true",
                     });
 
-                    assert_blinded!(ctx, "polyvpn.dns.resolved", {
+                    assert_blinded!(ctx, "qvpn.dns.resolved", {
                         field: "queried_domain",
                         blinding: "hmac_sha3",
                     });
 
-                    assert_povc_witness!(ctx, "polyvpn.dns", {
+                    assert_povc_witness!(ctx, "qvpn.dns", {
                         witness_type: "dns_resolution",
                         tunnel_id: &tunnel_id,
                     });
@@ -153,7 +153,7 @@ impl Journey for PolyvpnJourney {
                     let tunnel_id = ctx.get::<String>("tunnel_id");
 
                     let payload = ctx.generate_test_payload(1024 * 256); // 256 KiB
-                    let transfer = ctx.polyvpn().send_data(
+                    let transfer = ctx.qvpn().send_data(
                         &tunnel_id,
                         &payload,
                     )?;
@@ -174,11 +174,11 @@ impl Journey for PolyvpnJourney {
                         .find(|r| r.node_id == charlie_id);
                     assert!(charlie_relay.is_some(), "Charlie should be in the relay path");
 
-                    assert_metric_emitted!(ctx, "polyvpn.data.scatter_routed", {
+                    assert_metric_emitted!(ctx, "qvpn.data.scatter_routed", {
                         "relay_count" => &transfer.relay_count.to_string(),
                     });
 
-                    assert_blinded!(ctx, "polyvpn.data.scatter_routed", {
+                    assert_blinded!(ctx, "qvpn.data.scatter_routed", {
                         field: "payload_content",
                         blinding: "absent",
                     });
@@ -194,12 +194,12 @@ impl Journey for PolyvpnJourney {
                 .action(StepAction::Execute(|ctx: &mut ConvoyContext| {
                     let tunnel_id = ctx.get::<String>("tunnel_id");
 
-                    let ks_result = ctx.polyvpn().test_killswitch(&tunnel_id)?;
+                    let ks_result = ctx.qvpn().test_killswitch(&tunnel_id)?;
 
                     assert!(ks_result.killswitch_armed);
 
                     // Simulate tunnel drop
-                    ctx.polyvpn().simulate_tunnel_drop(&tunnel_id)?;
+                    ctx.qvpn().simulate_tunnel_drop(&tunnel_id)?;
 
                     assert!(ks_result.all_traffic_blocked);
                     assert!(ks_result.dns_leak_detected == false);
@@ -207,16 +207,16 @@ impl Journey for PolyvpnJourney {
                     assert!(ks_result.webrtc_leak_detected == false);
 
                     // Re-establish and verify reconnect
-                    let reconnect = ctx.polyvpn().reconnect(&tunnel_id)?;
+                    let reconnect = ctx.qvpn().reconnect(&tunnel_id)?;
                     assert!(reconnect.established);
                     assert!(reconnect.session_resumed);
 
-                    assert_metric_emitted!(ctx, "polyvpn.killswitch.tested", {
+                    assert_metric_emitted!(ctx, "qvpn.killswitch.tested", {
                         "leaks_detected" => "0",
                         "reconnected" => "true",
                     });
 
-                    assert_povc_witness!(ctx, "polyvpn.killswitch", {
+                    assert_povc_witness!(ctx, "qvpn.killswitch", {
                         witness_type: "leak_test",
                         tunnel_id: &tunnel_id,
                     });
@@ -232,7 +232,7 @@ impl Journey for PolyvpnJourney {
                 .action(StepAction::Execute(|ctx: &mut ConvoyContext| {
                     let tunnel_id = ctx.get::<String>("tunnel_id");
 
-                    let topology = ctx.polyvpn().tunnel_topology(&tunnel_id)?;
+                    let topology = ctx.qvpn().tunnel_topology(&tunnel_id)?;
 
                     let jurisdictions: Vec<&str> = topology.nodes.iter()
                         .map(|n| n.jurisdiction.as_str())
@@ -266,7 +266,7 @@ impl Journey for PolyvpnJourney {
                     assert!(merkle.chain_intact);
                     assert!(merkle.root_hash_valid);
 
-                    assert_metric_emitted!(ctx, "polyvpn.jurisdiction.verified", {
+                    assert_metric_emitted!(ctx, "qvpn.jurisdiction.verified", {
                         "fvey_excluded" => "true",
                         "diversity_ok" => "true",
                     });
@@ -280,7 +280,7 @@ impl Journey for PolyvpnJourney {
                 .party("alice")
                 .depends_on(&["verify_jurisdiction_diversity"])
                 .action(StepAction::Execute(|ctx: &mut ConvoyContext| {
-                    let telemetry = ctx.streamsight().drain_telemetry("poly-vpn-v1");
+                    let telemetry = ctx.streamsight().drain_telemetry("q-vpn-v1");
 
                     for event in &telemetry {
                         assert_blinded!(ctx, &event.event_type, {
@@ -305,15 +305,15 @@ impl Journey for PolyvpnJourney {
                     }
 
                     let cortex = CortexVisibility::new(ctx);
-                    cortex.assert_redacted("polyvpn", RedactPolicy::ContentFields)?;
-                    cortex.assert_obfuscated("polyvpn", ObfuscatePolicy::PartyIdentifiers)?;
+                    cortex.assert_redacted("qvpn", RedactPolicy::ContentFields)?;
+                    cortex.assert_obfuscated("qvpn", ObfuscatePolicy::PartyIdentifiers)?;
 
                     assert!(telemetry.len() >= 6, "Expected at least 6 telemetry events");
 
                     for event in &telemetry {
                         assert!(
-                            event.namespace.starts_with("poly-vpn-v1"),
-                            "Telemetry leaked outside poly-vpn-v1 namespace: {}",
+                            event.namespace.starts_with("q-vpn-v1"),
+                            "Telemetry leaked outside q-vpn-v1 namespace: {}",
                             event.namespace
                         );
                     }
@@ -327,16 +327,16 @@ impl Journey for PolyvpnJourney {
     fn metrics(&self) -> JourneyMetrics {
         JourneyMetrics {
             expected_events: vec![
-                "polyvpn.tunnel.connected",
-                "polyvpn.mimicry.activated",
-                "polyvpn.dns.resolved",
-                "polyvpn.data.scatter_routed",
-                "polyvpn.killswitch.tested",
-                "polyvpn.jurisdiction.verified",
+                "qvpn.tunnel.connected",
+                "qvpn.mimicry.activated",
+                "qvpn.dns.resolved",
+                "qvpn.data.scatter_routed",
+                "qvpn.killswitch.tested",
+                "qvpn.jurisdiction.verified",
             ],
             max_duration_ms: 90_000,
             required_povc_witnesses: 4,
-            lex_namespace: "poly-vpn-v1",
+            lex_namespace: "q-vpn-v1",
         }
     }
 }
@@ -347,10 +347,10 @@ mod tests {
     use estream_test::convoy::ConvoyRunner;
 
     #[tokio::test]
-    async fn run_polyvpn_journey() {
+    async fn run_qvpn_journey() {
         let runner = ConvoyRunner::new()
             .with_scatter_route()
-            .with_streamsight("poly-vpn-v1")
+            .with_streamsight("q-vpn-v1")
             .with_stratum()
             .with_cortex()
             .with_killswitch();

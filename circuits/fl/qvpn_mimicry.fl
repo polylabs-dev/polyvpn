@@ -1,14 +1,14 @@
-// Poly VPN Traffic Mimicry — Statistical traffic analysis resistance (v0.12.0)
+// Q VPN Traffic Mimicry — Statistical traffic analysis resistance (v0.12.0)
 //
 // CLASSIFICATION: TRADE SECRET
 // Implementation shapes distribute streams to match popular application
 // traffic signatures. DPI and statistical classifiers see Netflix,
 // YouTube, iCloud, Spotify, or Zoom — not VPN traffic.
 //
-// Companion to polyvpn_incognito.fl which wraps mimicry in a full
+// Companion to qvpn_incognito.fl which wraps mimicry in a full
 // session lifecycle with constant_time + blind enforcement.
 
-import polykit_metering
+import qkit_metering
 
 type MimicryProfile = enum {
     Netflix,
@@ -56,7 +56,7 @@ data FingerprintResult : vpn v1 {
     features_total: u32,
 }
     store kv
-    govern lex global/org/polylabs/vpn/mimicry
+    govern lex global/org/polyqlabs/vpn/mimicry
     cortex {
         infer on_write
         on_anomaly alert "vpn-team"
@@ -70,7 +70,7 @@ stream fingerprint_events: event<FingerprintResult>
 // --- Look up traffic shape parameters for a mimicry profile ---
 circuit get_traffic_shape(profile: MimicryProfile) -> TrafficShape
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/mimicry
+    lex global/org/polyqlabs/vpn/mimicry
     @precision C
     constant_time true
     blind full
@@ -165,7 +165,7 @@ circuit shape_traffic(
     sequence: u64,
 ) -> ShapedPacket
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/mimicry
+    lex global/org/polyqlabs/vpn/mimicry
     @precision C
     constant_time true
     blind full
@@ -216,7 +216,7 @@ circuit apply_mimicry_profile(
     profile: MimicryProfile,
 ) -> list<ShapedPacket>
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/mimicry
+    lex global/org/polyqlabs/vpn/mimicry
     @precision C
     constant_time true
     blind full
@@ -235,7 +235,7 @@ circuit generate_padding(
     count: u32,
 ) -> list<bytes>
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/mimicry
+    lex global/org/polyqlabs/vpn/mimicry
     @precision C
     constant_time true
     blind full
@@ -264,7 +264,7 @@ circuit detect_fingerprint(
     sample_timings_us: list<u32>,
 ) -> FingerprintResult
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/mimicry
+    lex global/org/polyqlabs/vpn/mimicry
     @precision C
     constant_time true
     blind full

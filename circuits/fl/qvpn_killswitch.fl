@@ -1,11 +1,11 @@
-// Poly VPN Kill Switch — OS-level firewall enforcement (v0.12.0)
+// Q VPN Kill Switch — OS-level firewall enforcement (v0.12.0)
 //
 // Prevents cleartext traffic leaks on tunnel failure. Activates
 // platform firewall rules (WFP on Windows, pf on macOS, nftables
 // on Linux) to block all non-tunnel traffic. Leak detection runs
 // continuous probes to verify no DNS or IP leaks escape the tunnel.
 
-import polykit_metering
+import qkit_metering
 
 type KillswitchState = enum {
     Inactive,
@@ -39,7 +39,7 @@ data LeakTestResult : vpn v1 {
     leaked_addresses: list<string>,
 }
     store kv
-    govern lex global/org/polylabs/vpn/killswitch
+    govern lex global/org/polyqlabs/vpn/killswitch
     cortex {
         obfuscate [leaked_addresses]
         infer on_write
@@ -54,7 +54,7 @@ data KillswitchConfig : vpn v1 {
     tunnel_interfaces: list<string>,
 }
     store kv
-    govern lex global/org/polylabs/vpn/killswitch
+    govern lex global/org/polyqlabs/vpn/killswitch
     cortex {
         obfuscate [user_id]
         infer on_write
@@ -76,7 +76,7 @@ circuit activate_killswitch(
     exit_endpoints: list<bytes(16)>,
 ) -> (KillswitchState, list<FirewallRule>)
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/killswitch
+    lex global/org/polyqlabs/vpn/killswitch
     @precision C
     @observe metrics: [killswitch_activations, rules_created]
     monitor "killswitch_failures" { killswitch_activations > 0 }
@@ -171,7 +171,7 @@ circuit deactivate_killswitch(
     active_rules: list<FirewallRule>,
 ) -> KillswitchState
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/killswitch
+    lex global/org/polyqlabs/vpn/killswitch
     @precision C
     @observe metrics: [killswitch_deactivations]
     meters [compute_cycles]
@@ -189,7 +189,7 @@ circuit check_for_leaks(
     exit_ids: list<bytes(16)>,
 ) -> LeakTestResult
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/killswitch
+    lex global/org/polyqlabs/vpn/killswitch
     @precision C
     @observe metrics: [leak_tests, dns_leaks_detected, ip_leaks_detected]
     monitor "leak_rate" { dns_leaks_detected + ip_leaks_detected == 0 }
@@ -242,7 +242,7 @@ circuit enforce_dns_policy(
     tunnel_dns_servers: list<bytes(16)>,
 ) -> list<FirewallRule>
     profile poly_framework_standard
-    lex global/org/polylabs/vpn/killswitch
+    lex global/org/polyqlabs/vpn/killswitch
     @precision C
     @observe metrics: [dns_policies_enforced]
     meters [compute_cycles]

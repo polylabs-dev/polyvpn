@@ -1,4 +1,4 @@
-// Poly VPN RBAC — Role-based access control for VPN operations (v0.12.0)
+// Q VPN RBAC — Role-based access control for VPN operations (v0.12.0)
 //
 // Fine-grained RBAC graph governing who can manage exits, routes,
 // incognito profiles, and org-level VPN policies. Inherits from the
@@ -17,9 +17,9 @@
 //   bit 9  — vpn.audit.read        (read audit trails)
 //   bit 10 — vpn.admin             (full admin)
 
-import polykit_identity
-import polykit_metering
-import polykit_governance
+import qkit_identity
+import qkit_metering
+import qkit_governance
 
 data VpnRole : vpn v1 {
     role_id: bytes(16),
@@ -31,7 +31,7 @@ data VpnRole : vpn v1 {
     created_by: bytes(32),
 }
     store kv
-    govern lex global/org/polylabs/vpn/rbac
+    govern lex global/org/polyqlabs/vpn/rbac
     cortex {
         infer on_write
         on_anomaly alert "vpn-team"
@@ -48,7 +48,7 @@ data VpnRoleAssignment : vpn v1 {
     expires_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/rbac
+    govern lex global/org/polyqlabs/vpn/rbac
     cortex {
         obfuscate [principal]
         infer on_write
@@ -128,7 +128,7 @@ circuit create_vpn_role(
     creator_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> VpnRole
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision C
     @attested true
@@ -146,7 +146,7 @@ circuit create_vpn_role(
     }
 {
     let ts = now_ns() / 1000000
-    let creator_id = polykit_identity::derive_user_id(creator_pk)
+    let creator_id = qkit_identity::derive_user_id(creator_pk)
     let role_id = bit_slice(sha3_256(concat(name, creator_id, csprng(8), ts)), 0, 128)
 
     let role = VpnRole {
@@ -166,7 +166,7 @@ circuit create_vpn_role(
     eslite_insert("vpn_roles", role_id, serialize(role))
     emit(vpn_permission_changes, role)
 
-    polykit_metering::record_usage(creator_id, "vpn_rbac_create_role", DimensionValues {
+    qkit_metering::record_usage(creator_id, "vpn_rbac_create_role", DimensionValues {
         executions: 1, hashes: 1, bandwidth: 0,
         storage: 256, observables: 1, proofs: 1, circuits: 0, mpc_sessions: 0,
     })
@@ -184,7 +184,7 @@ circuit assign_vpn_role(
     grantor_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> VpnRoleAssignment
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision C
     @attested true
@@ -195,7 +195,7 @@ circuit assign_vpn_role(
     wasm_abi [eslite_insert, eslite_query, now, csprng]
 {
     let ts = now_ns() / 1000000
-    let grantor_id = polykit_identity::derive_user_id(grantor_pk)
+    let grantor_id = qkit_identity::derive_user_id(grantor_pk)
     let assignment_id = bit_slice(sha3_256(concat(principal, role_id, scope_id, csprng(8), ts)), 0, 128)
 
     let assignment = VpnRoleAssignment {
@@ -225,7 +225,7 @@ circuit revoke_vpn_role(
     revoker_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> bool
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision C
     @attested true
@@ -235,7 +235,7 @@ circuit revoke_vpn_role(
     wasm_abi [eslite_delete, eslite_query, now]
 {
     let ts = now_ns() / 1000000
-    let revoker_id = polykit_identity::derive_user_id(revoker_pk)
+    let revoker_id = qkit_identity::derive_user_id(revoker_pk)
     let assignment = eslite_query("vpn_role_assignments", assignment_id)
 
     overlay_set(vpn_rbac, assignment.role_id, audit_trail,
@@ -253,7 +253,7 @@ circuit check_vpn_permission(
     scope_id: bytes(32),
     permission_bit: u64,
 ) -> bool
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision D
     @observe metrics: [permission_checks, permission_granted, permission_denied]
@@ -268,7 +268,7 @@ circuit resolve_vpn_permissions(
     principal: bytes(32),
     scope_id: bytes(32),
 ) -> u64
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision C
     @observe metrics: [permission_resolutions, inheritance_depth]
@@ -295,7 +295,7 @@ circuit resolve_vpn_permissions(
 
 // --- Expand bitmask to human-readable permission set ---
 circuit expand_permissions(bitmask: u64) -> VpnPermissionSet
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision D
     meters [compute_cycles]
@@ -317,7 +317,7 @@ circuit expand_permissions(bitmask: u64) -> VpnPermissionSet
 
 // --- Expire stale role assignments ---
 circuit expire_stale_assignments(current_time: u64) -> u32
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision C
     @attested true
@@ -344,7 +344,7 @@ circuit expire_stale_assignments(current_time: u64) -> u32
 circuit audit_principal_vpn(
     principal: bytes(32),
 ) -> list<VpnRoleAssignment>
-    lex global/org/polylabs/vpn/rbac
+    lex global/org/polyqlabs/vpn/rbac
     @status production
     @precision B
     @observe metrics: [audit_queries]

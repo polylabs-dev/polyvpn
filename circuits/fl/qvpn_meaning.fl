@@ -4,7 +4,7 @@
 /// noise filter with 4 suppression rules and 6 signal rules, plus
 /// 2 SME panels for network security and censorship evasion.
 
-lex polylabs/polyvpn
+lex polyqlabs/qvpn
 
 @target software
 @codegen_targets ["wasm", "rust"]
@@ -18,7 +18,7 @@ import "core/intelligence/ce_meaning.fl" {
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const POLYVPN_CE_LEX: string = "polylabs/polyvpn"
+const POLYVPN_CE_LEX: string = "polyqlabs/qvpn"
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // §1  Meaning Domains
@@ -28,7 +28,7 @@ const POLYVPN_CE_LEX: string = "polylabs/polyvpn"
 /// CE learns per-user network patterns to predict degradation and trigger
 /// proactive route failover.
 circuit network_tunnel_health_domain() -> MeaningDomain
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
     @status draft
     @precision C
 {
@@ -53,7 +53,7 @@ circuit network_tunnel_health_domain() -> MeaningDomain
 /// detection across jurisdictions. CE correlates events to distinguish
 /// targeted probes from broad censorship campaigns.
 circuit network_censorship_detection_domain() -> MeaningDomain
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
     @status draft
     @precision C
 {
@@ -78,7 +78,7 @@ circuit network_censorship_detection_domain() -> MeaningDomain
 /// analysis resistance. CE calibrates mimicry profiles against real
 /// protocol baselines per jurisdiction.
 circuit network_mimicry_effectiveness_domain() -> MeaningDomain
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
     @status draft
     @precision C
 {
@@ -103,8 +103,8 @@ circuit network_mimicry_effectiveness_domain() -> MeaningDomain
 // §2  Noise Filter
 // ═══════════════════════════════════════════════════════════════════════════════
 
-circuit polyvpn_noise_filter() -> NoiseFilter
-    lex polylabs/polyvpn
+circuit qvpn_noise_filter() -> NoiseFilter
+    lex polyqlabs/qvpn
     @status draft
     @precision C
 {
@@ -134,12 +134,12 @@ circuit polyvpn_noise_filter() -> NoiseFilter
 /// Network security posture: weighs cryptographic integrity against
 /// latency impact and user experience disruption.
 circuit network_security_panel() -> SMEPanel
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
     @status draft
     @precision C
 {
     SMEPanel {
-        panel_id: "polyvpn/network_security_posture",
+        panel_id: "qvpn/network_security_posture",
         lex_namespace: POLYVPN_CE_LEX,
         trigger: "latency_sustained_200ms OR packet_loss_2pct OR fwd_secrecy_failure OR exit_trust_degradation",
         config: SMEPanelConfig {
@@ -156,12 +156,12 @@ circuit network_security_panel() -> SMEPanel
 /// Censorship evasion: decides mimicry profile rotation urgency vs
 /// user session stability and bandwidth overhead.
 circuit censorship_evasion_panel() -> SMEPanel
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
     @status draft
     @precision C
 {
     SMEPanel {
-        panel_id: "polyvpn/censorship_evasion",
+        panel_id: "qvpn/censorship_evasion",
         lex_namespace: POLYVPN_CE_LEX,
         trigger: "dpi_fingerprint_match OR dns_poisoning_cluster OR tcp_rst_spike OR protocol_block_multi_user",
         config: SMEPanelConfig {
@@ -181,8 +181,8 @@ circuit censorship_evasion_panel() -> SMEPanel
 
 /// Register all PolyVPN CE components: 3 meaning domains, noise filter,
 /// and 2 SME panels under the product lex namespace.
-circuit polyvpn_register_ce(product_lex: string) -> bool
-    lex polylabs/polyvpn
+circuit qvpn_register_ce(product_lex: string) -> bool
+    lex polyqlabs/qvpn
     @status draft
     @precision B
     @attested true
@@ -195,7 +195,7 @@ circuit polyvpn_register_ce(product_lex: string) -> bool
     let ok = ok && ce_register_meaning_domain(product_lex, network_censorship_detection_domain())
     let ok = ok && ce_register_meaning_domain(product_lex, network_mimicry_effectiveness_domain())
 
-    let ok = ok && ce_register_noise_filter(product_lex, polyvpn_noise_filter())
+    let ok = ok && ce_register_noise_filter(product_lex, qvpn_noise_filter())
 
     let ok = ok && ce_register_sme_panel(product_lex, network_security_panel())
     let ok = ok && ce_register_sme_panel(product_lex, censorship_evasion_panel())
@@ -209,7 +209,7 @@ circuit polyvpn_register_ce(product_lex: string) -> bool
 
 #[test]
 circuit test_meaning_domains_valid()
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
 {
     let d1 = network_tunnel_health_domain()
     let d2 = network_censorship_detection_domain()
@@ -224,21 +224,21 @@ circuit test_meaning_domains_valid()
 
 #[test]
 circuit test_noise_filter_counts()
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
 {
-    let nf = polyvpn_noise_filter()
+    let nf = qvpn_noise_filter()
     assert len(nf.suppression_rules) == 4, "expected 4 suppression rules"
     assert len(nf.signal_rules) == 6, "expected 6 signal rules"
 }
 
 #[test]
 circuit test_sme_panels_configured()
-    lex polylabs/polyvpn
+    lex polyqlabs/qvpn
 {
     let p1 = network_security_panel()
     let p2 = censorship_evasion_panel()
-    assert p1.panel_id == "polyvpn/network_security_posture"
-    assert p2.panel_id == "polyvpn/censorship_evasion"
+    assert p1.panel_id == "qvpn/network_security_posture"
+    assert p2.panel_id == "qvpn/censorship_evasion"
     assert p1.config.min_panelists >= 2
     assert p2.config.confidence_threshold_bps >= 7500
 }

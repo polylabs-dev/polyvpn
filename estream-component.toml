@@ -1,21 +1,21 @@
 [package]
-name = "polyvpn"
+name = "qvpn"
 version = "0.1.0"
 description = "PQ scatter-routed VPN with traffic mimicry and DNS-over-HTTPS resolution"
 license = "LicenseRef-PolyQuantum-Commercial"
-repository = "https://github.com/polylabs-dev/polyvpn"
+repository = "https://github.com/polylabs-dev/qvpn"
 
 [publisher]
 id = "polylabs-dev"
-name = "Poly Labs"
-signing_key_id = "polylabs-prime-v1"
+name = "PolyQ Labs"
+signing_key_id = "polyqlabs-prime-v1"
 
 [flir]
 api_version = "0.22.0"
 min_platform_version = "0.22.0"
 
 [dependencies]
-polykit = ">=0.2.0"
+qkit = ">=0.2.0"
 
 [pricing]
 license_type = "per-invocation"

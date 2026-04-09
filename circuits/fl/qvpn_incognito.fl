@@ -1,4 +1,4 @@
-// Poly VPN Incognito Mode — Traffic mimicry session lifecycle (v0.12.0)
+// Q VPN Incognito Mode — Traffic mimicry session lifecycle (v0.12.0)
 //
 // CLASSIFICATION: TRADE SECRET — MOST SENSITIVE CIRCUIT IN THE SUITE
 // Delivered as compiled WASM post-install. Source never leaves build infra.
@@ -12,9 +12,9 @@
 // session lifecycle can an observer distinguish VPN traffic from the
 // selected mimicry profile's genuine traffic pattern.
 
-import polykit_metering
-import polyvpn_mimicry
-import polyvpn_encrypt
+import qkit_metering
+import qvpn_mimicry
+import qvpn_encrypt
 
 data IncognitoSession : vpn v1 {
     session_id: bytes(32),
@@ -31,7 +31,7 @@ data IncognitoSession : vpn v1 {
     last_profile_switch_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/incognito
+    govern lex global/org/polyqlabs/vpn/incognito
     cortex {
         redact [tunnel_session_id]
         obfuscate [user_id, session_id]
@@ -49,7 +49,7 @@ data IncognitoHealthCheck : vpn v1 {
     checked_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/incognito
+    govern lex global/org/polyqlabs/vpn/incognito
     cortex {
         obfuscate [session_id]
         infer on_write
@@ -81,7 +81,7 @@ circuit activate_incognito(
     cover_bandwidth_mbps: u32,
 ) -> IncognitoSession
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/incognito
+    lex global/org/polyqlabs/vpn/incognito
     @precision C
     constant_time true
     blind full
@@ -111,7 +111,7 @@ circuit activate_incognito(
     let seed = concat(user_id, tunnel_session_id, csprng(16), ts)
     let session_id = sha3_256(seed)
 
-    let _shape = polyvpn_mimicry::get_traffic_shape(profile)
+    let _shape = qvpn_mimicry::get_traffic_shape(profile)
 
     let session = IncognitoSession {
         session_id: session_id,
@@ -140,7 +140,7 @@ circuit switch_profile(
     ramp_duration_ms: u32,
 ) -> (IncognitoSession, ProfileTransition)
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/incognito
+    lex global/org/polyqlabs/vpn/incognito
     @precision C
     constant_time true
     blind full
@@ -153,8 +153,8 @@ circuit switch_profile(
 {
     let ts = now_ns() / 1000000
 
-    let old_shape = polyvpn_mimicry::get_traffic_shape(session.active_profile)
-    let new_shape = polyvpn_mimicry::get_traffic_shape(new_profile)
+    let old_shape = qvpn_mimicry::get_traffic_shape(session.active_profile)
+    let new_shape = qvpn_mimicry::get_traffic_shape(new_profile)
 
     let transition_packets = ramp_duration_ms / max(1, new_shape.inter_packet_delay_us / 1000)
 
@@ -184,7 +184,7 @@ circuit shape_incognito_packet(
     sequence: u64,
 ) -> (ShapedPacket, IncognitoSession)
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/incognito
+    lex global/org/polyqlabs/vpn/incognito
     @precision C
     constant_time true
     blind full
@@ -200,8 +200,8 @@ circuit shape_incognito_packet(
         assert len(output.0.payload) > 0
     }
 {
-    let shape = polyvpn_mimicry::get_traffic_shape(session.active_profile)
-    let shaped = polyvpn_mimicry::shape_traffic(packet, shape, sequence)
+    let shape = qvpn_mimicry::get_traffic_shape(session.active_profile)
+    let shaped = qvpn_mimicry::shape_traffic(packet, shape, sequence)
 
     let updated = IncognitoSession {
         ...session,
@@ -219,7 +219,7 @@ circuit verify_incognito_health(
     sample_timings_us: list<u32>,
 ) -> IncognitoHealthCheck
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/incognito
+    lex global/org/polyqlabs/vpn/incognito
     @precision C
     constant_time true
     blind full
@@ -232,9 +232,9 @@ circuit verify_incognito_health(
 {
     let ts = now_ns() / 1000000
 
-    let fp = polyvpn_mimicry::detect_fingerprint(sample_packets, sample_timings_us)
+    let fp = qvpn_mimicry::detect_fingerprint(sample_packets, sample_timings_us)
 
-    let shape = polyvpn_mimicry::get_traffic_shape(session.active_profile)
+    let shape = qvpn_mimicry::get_traffic_shape(session.active_profile)
     let avg_timing = mean(sample_timings_us)
     let latency_ok = abs(avg_timing - shape.inter_packet_delay_us) < shape.delay_jitter_us * 3
 
@@ -259,7 +259,7 @@ circuit deactivate_incognito(
     session: IncognitoSession,
 ) -> bool
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/incognito
+    lex global/org/polyqlabs/vpn/incognito
     @precision C
     constant_time true
     blind full
@@ -269,7 +269,7 @@ circuit deactivate_incognito(
 {
     eslite_delete("incognito_sessions", session.session_id)
 
-    polykit_metering::record_usage(session.user_id, "vpn_incognito_session", DimensionValues {
+    qkit_metering::record_usage(session.user_id, "vpn_incognito_session", DimensionValues {
         executions: 1,
         hashes: session.packets_shaped,
         bandwidth: session.bytes_shaped,

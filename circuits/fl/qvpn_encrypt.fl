@@ -1,11 +1,11 @@
-// Poly VPN Tunnel Encryption — Per-exit ML-KEM-1024 key exchange + AES-256-GCM (v0.12.0)
+// Q VPN Tunnel Encryption — Per-exit ML-KEM-1024 key exchange + AES-256-GCM (v0.12.0)
 //
 // Each exit node gets an independent ML-KEM-1024 session key.
 // Scatter streams are cryptographically isolated: compromising one
 // exit's session key reveals nothing about traffic on other exits.
 
-import polykit_identity
-import polykit_metering
+import qkit_identity
+import qkit_metering
 
 data TunnelKey : vpn v1 {
     session_id: bytes(32),
@@ -16,7 +16,7 @@ data TunnelKey : vpn v1 {
     expires_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/tunnel
+    govern lex global/org/polyqlabs/vpn/tunnel
     cortex {
         redact [shared_secret]
         obfuscate [exit_id]
@@ -37,7 +37,7 @@ data TunnelSession : vpn v1 {
     established_at: u64,
 }
     store kv
-    govern lex global/org/polylabs/vpn/tunnel
+    govern lex global/org/polyqlabs/vpn/tunnel
     cortex {
         redact [tunnel_key]
         obfuscate [user_id, exit_id]
@@ -73,7 +73,7 @@ circuit handshake_init(
     signing_sk: bytes(4896),
 ) -> HandshakeResult
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/tunnel
+    lex global/org/polyqlabs/vpn/tunnel
     @precision C
     constant_time true
     @observe metrics: [handshakes_initiated, handshake_latency_ns]
@@ -157,7 +157,7 @@ circuit handshake_respond(
     client_user_id: bytes(16),
 ) -> TunnelKey
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/tunnel
+    lex global/org/polyqlabs/vpn/tunnel
     @precision C
     constant_time true
     @observe metrics: [handshakes_responded]
@@ -186,7 +186,7 @@ circuit encrypt_packet(
     plaintext: bytes,
 ) -> (EncryptedPacket, TunnelSession)
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/tunnel
+    lex global/org/polyqlabs/vpn/tunnel
     @precision C
     constant_time true
     @observe metrics: [packets_encrypted, encrypt_latency_ns, bytes_encrypted]
@@ -229,7 +229,7 @@ circuit decrypt_packet(
     pkt: EncryptedPacket,
 ) -> (bytes, TunnelSession)
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/tunnel
+    lex global/org/polyqlabs/vpn/tunnel
     @precision C
     constant_time true
     @observe metrics: [packets_decrypted, decrypt_failures]
@@ -256,7 +256,7 @@ circuit rotate_key(
     signing_sk: bytes(4896),
 ) -> TunnelSession
     profile poly_framework_sensitive
-    lex global/org/polylabs/vpn/tunnel
+    lex global/org/polyqlabs/vpn/tunnel
     @precision C
     constant_time true
     @observe metrics: [key_rotations]
@@ -280,7 +280,7 @@ circuit rotate_key(
 
     let _sig = mldsa_sign(signing_sk, serialize(new_key))
 
-    polykit_metering::record_usage(session.user_id, "tunnel_key_rotate", DimensionValues {
+    qkit_metering::record_usage(session.user_id, "tunnel_key_rotate", DimensionValues {
         executions: 1, hashes: 2, bandwidth: 0,
         storage: 0, observables: 1, proofs: 0, circuits: 0, mpc_sessions: 0,
     })

@@ -1,16 +1,16 @@
-# Poly VPN Architecture
+# Q VPN Architecture
 
 **Version**: 3.0
 **Date**: February 2026
 **Platform**: eStream v0.9.1
-**Upstream**: PolyKit v0.3.0, eStream graph/DAG constructs
+**Upstream**: QKit v0.3.0, eStream graph/DAG constructs
 **Build Pipeline**: FastLang (.fl) → FLIR → Rust/WASM codegen → .escd
 
 ---
 
 ## Overview
 
-Poly VPN is a post-quantum encrypted, scatter-routed VPN. Traffic is not funneled through a single tunnel to a single exit node — it is scatter-routed across multiple exit nodes simultaneously so that no single exit sees the complete picture. Traffic mimicry (trade secret) makes VPN traffic indistinguishable from normal browsing. All cryptographic operations run in WASM (Rust). TypeScript is a DOM binding layer only.
+Q VPN is a post-quantum encrypted, scatter-routed VPN. Traffic is not funneled through a single tunnel to a single exit node — it is scatter-routed across multiple exit nodes simultaneously so that no single exit sees the complete picture. Traffic mimicry (trade secret) makes VPN traffic indistinguishable from normal browsing. All cryptographic operations run in WASM (Rust). TypeScript is a DOM binding layer only.
 
 ### What Changed in v3.0
 
@@ -19,20 +19,20 @@ Poly VPN is a post-quantum encrypted, scatter-routed VPN. Traffic is not funnele
 | Exit mesh | Custom topology | `graph vpn_exit_mesh` (mirrors `device_mesh.fl`) |
 | Routing | Custom scatter router | `dag tunnel_route` with typed overlays |
 | Exit selection | VRF random | `ai_feed exit_selection` (optimal multi-exit route) |
-| Circuit format | FLIR YAML (`circuit.flir.yaml`) | FastLang `.fl` with PolyKit profiles |
-| RBAC | Per-circuit annotations | eStream `rbac.fl` composed via PolyKit |
+| Circuit format | FLIR YAML (`circuit.flir.yaml`) | FastLang `.fl` with QKit profiles |
+| RBAC | Per-circuit annotations | eStream `rbac.fl` composed via QKit |
 | Platform | eStream v0.8.1 | eStream v0.9.1 |
 
 ---
 
 ## Zero-Linkage Privacy
 
-Poly VPN operates under the Poly Labs zero-linkage privacy architecture:
+Q VPN operates under the PolyQ Labs zero-linkage privacy architecture:
 
-- **HKDF context**: `poly-vpn-v1` — produces `user_id`, signing key, and encryption key that cannot be correlated with any other Poly product
-- **Lex namespace**: `esn/global/org/polylabs/vpn` — completely isolated from other product namespaces
-- **StreamSight**: Telemetry stays within `polylabs.vpn.*` lex paths
-- **Metering**: Own `metering_graph` instance under `polylabs.vpn.metering` lex
+- **HKDF context**: `q-vpn-v1` — produces `user_id`, signing key, and encryption key that cannot be correlated with any other Poly product
+- **Lex namespace**: `esn/global/org/polyqlabs/vpn` — completely isolated from other product namespaces
+- **StreamSight**: Telemetry stays within `polyqlabs.vpn.*` lex paths
+- **Metering**: Own `metering_graph` instance under `polyqlabs.vpn.metering` lex
 - **Billing**: Tier checked via blinded token status, not cross-product identity
 
 ---
@@ -45,7 +45,7 @@ Poly VPN operates under the Poly Labs zero-linkage privacy architecture:
 SPARK biometric → Secure Enclave/TEE → master_seed (in WASM, never exposed to JS)
                                             │
                                             ▼
-                                   HKDF-SHA3-256(master_seed, "poly-vpn-v1")
+                                   HKDF-SHA3-256(master_seed, "q-vpn-v1")
                                             │
                                             ├── ML-DSA-87 signing key pair
                                             │   (tunnel setup, profile changes, exit attestation)
@@ -60,7 +60,7 @@ SPARK biometric → Secure Enclave/TEE → master_seed (in WASM, never exposed t
 user_id = SHA3-256(spark_ml_dsa_87_public_key)[0..16]   # 16-byte truncated hash
 ```
 
-All stream topics, tunnel ownership, and profiles reference this SPARK-derived `user_id`. There are no usernames, emails, or phone numbers. This `user_id` is unique to Poly VPN and cannot be linked to identities in other Poly products.
+All stream topics, tunnel ownership, and profiles reference this SPARK-derived `user_id`. There are no usernames, emails, or phone numbers. This `user_id` is unique to Q VPN and cannot be linked to identities in other Q products.
 
 ---
 
@@ -68,7 +68,7 @@ All stream topics, tunnel ownership, and profiles reference this SPARK-derived `
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                        Poly VPN Client                                │
+│                        Q VPN Client                                │
 │                                                                       │
 │  ┌────────────────────────────────────────────────────────────────┐  │
 │  │  UI Layer (Tauri desktop / React Native mobile)                  │  │
@@ -80,15 +80,15 @@ All stream topics, tunnel ownership, and profiles reference this SPARK-derived `
 │  │                                                                   │  │
 │  │  graph vpn_exit_mesh    — exit node topology + overlays          │  │
 │  │  dag tunnel_route       — multi-hop scatter routing DAG          │  │
-│  │  graph metering_graph   — per-product 8D metering (PolyKit)     │  │
-│  │  graph user_graph       — per-product identity (PolyKit)        │  │
+│  │  graph metering_graph   — per-product 8D metering (QKit)     │  │
+│  │  graph user_graph       — per-product identity (QKit)        │  │
 │  └────────────────────────────┬───────────────────────────────────┘  │
 │                                │                                      │
 │  ┌────────────────────────────┴───────────────────────────────────┐  │
 │  │  FastLang Circuits (WASM via .escd)                              │  │
 │  │                                                                   │  │
-│  │  polyvpn_encrypt.fl │ polyvpn_scatter.fl │ polyvpn_mimicry.fl   │  │
-│  │  polyvpn_killswitch.fl │ polyvpn_dns.fl │ polyvpn_metering.fl  │  │
+│  │  qvpn_encrypt.fl │ qvpn_scatter.fl │ qvpn_mimicry.fl   │  │
+│  │  qvpn_killswitch.fl │ qvpn_dns.fl │ qvpn_metering.fl  │  │
 │  │  (all ML-DSA-87 signed .escd packages, StreamSight-annotated)   │  │
 │  └────────────────────────────┬───────────────────────────────────┘  │
 │                                │                                      │
@@ -122,7 +122,7 @@ All stream topics, tunnel ownership, and profiles reference this SPARK-derived `
 
 ## Graph/DAG Constructs
 
-### VPN Exit Mesh (`polyvpn_exit_graph.fl`)
+### VPN Exit Mesh (`qvpn_exit_graph.fl`)
 
 The exit node network is modeled as a typed graph, mirroring the eStream `device_mesh.fl` pattern. Exit nodes are nodes; tunnel connections are edges. Overlays provide real-time state (latency, bandwidth, load, jurisdiction, blacklist status) without mutating the base graph. The `ai_feed` selects optimal multi-exit scatter routes.
 
@@ -176,7 +176,7 @@ series exit_series: vpn_exit_mesh
 
 Key circuits: `register_exit`, `select_exits`, `rotate_exits`, `update_exit_health`, `blacklist_exit`, `attest_exit`.
 
-### Tunnel Route DAG (`polyvpn_route_dag.fl`)
+### Tunnel Route DAG (`qvpn_route_dag.fl`)
 
 Multi-hop scatter routing is modeled as a DAG. Each route is a directed acyclic path through the exit mesh. Route nodes represent hops; hop edges carry latency and encryption overhead. Acyclicity is enforced to prevent routing loops.
 
@@ -237,7 +237,7 @@ Device -> [All traffic] -> VPN Server -> Internet
                            Exit node sees ALL traffic
 ```
 
-### Poly VPN (Scatter-Routed)
+### Q VPN (Scatter-Routed)
 ```
 Device -> Traffic split into streams via VRF
     |
@@ -296,7 +296,7 @@ split_tunnel:
 
 ### Multi-Hop (Built into Scatter)
 
-Traditional VPNs add latency with multi-hop chains. Poly VPN's scatter routing is inherently multi-exit — traffic goes through multiple paths by design, modeled as the `tunnel_route` DAG. Each path through the DAG is a multi-hop route with independent PQ session keys.
+Traditional VPNs add latency with multi-hop chains. Q VPN's scatter routing is inherently multi-exit — traffic goes through multiple paths by design, modeled as the `tunnel_route` DAG. Each path through the DAG is a multi-hop route with independent PQ session keys.
 
 ### Net Shield (DNS Protection)
 - DNS-over-eStream (PQ-encrypted DNS queries)
@@ -329,7 +329,7 @@ profiles:
 
 ## FastLang Circuits
 
-All circuits are written in FastLang `.fl` using PolyKit profiles. The build pipeline is:
+All circuits are written in FastLang `.fl` using QKit profiles. The build pipeline is:
 
 ```bash
 estream-dev build-wasm-client --from-fl circuits/fl/ --sign key.pem --enforce-budget
@@ -339,18 +339,18 @@ estream-dev build-wasm-client --from-fl circuits/fl/ --sign key.pem --enforce-bu
 
 | Circuit | File | Purpose | Size Budget |
 |---------|------|---------|-------------|
-| `polyvpn_encrypt` | `polyvpn_encrypt.fl` | ML-KEM-1024 per-exit session key exchange, packet encryption | ≤128 KB |
-| `polyvpn_scatter` | `polyvpn_scatter.fl` | VRF-directed stream splitting, scatter routing | ≤128 KB |
-| `polyvpn_mimicry` | `polyvpn_mimicry.fl` | Traffic shaping, cover traffic generation | ≤128 KB |
-| `polyvpn_killswitch` | `polyvpn_killswitch.fl` | OS firewall rule management, leak prevention | ≤64 KB |
-| `polyvpn_dns` | `polyvpn_dns.fl` | DNS-over-eStream, block list enforcement | ≤128 KB |
+| `qvpn_encrypt` | `qvpn_encrypt.fl` | ML-KEM-1024 per-exit session key exchange, packet encryption | ≤128 KB |
+| `qvpn_scatter` | `qvpn_scatter.fl` | VRF-directed stream splitting, scatter routing | ≤128 KB |
+| `qvpn_mimicry` | `qvpn_mimicry.fl` | Traffic shaping, cover traffic generation | ≤128 KB |
+| `qvpn_killswitch` | `qvpn_killswitch.fl` | OS firewall rule management, leak prevention | ≤64 KB |
+| `qvpn_dns` | `qvpn_dns.fl` | DNS-over-eStream, block list enforcement | ≤128 KB |
 
-All circuits compose PolyKit:
+All circuits compose QKit:
 ```fastlang
-circuit polyvpn_encrypt(user_id: bytes(16), exit_pubkey: bytes(1568), packet: bytes) -> bytes
+circuit qvpn_encrypt(user_id: bytes(16), exit_pubkey: bytes(1568), packet: bytes) -> bytes
     profile poly_framework_sensitive
-    composes: [polykit_identity, polykit_metering, polykit_sanitize]
-    lex esn/global/org/polylabs/vpn/encrypt
+    composes: [qkit_identity, qkit_metering, qkit_sanitize]
+    lex esn/global/org/polyqlabs/vpn/encrypt
     constant_time true
     observe metrics: [encrypt_ops, packet_size, latency_ns]
 {
@@ -362,9 +362,9 @@ circuit polyvpn_encrypt(user_id: bytes(16), exit_pubkey: bytes(1568), packet: by
 
 | Circuit | File | Purpose |
 |---------|------|---------|
-| `polyvpn_exit_router` | `polyvpn_exit_router.fl` | Exit node traffic forwarding, session validation |
-| `polyvpn_health` | `polyvpn_health.fl` | Exit node health broadcasting, attestation |
-| `polyvpn_metering` | `polyvpn_metering.fl` | Per-product 8D metering (isolated) |
+| `qvpn_exit_router` | `qvpn_exit_router.fl` | Exit node traffic forwarding, session validation |
+| `qvpn_health` | `qvpn_health.fl` | Exit node health broadcasting, attestation |
+| `qvpn_metering` | `qvpn_metering.fl` | Per-product 8D metering (isolated) |
 
 ---
 
@@ -374,7 +374,7 @@ circuit polyvpn_encrypt(user_id: bytes(16), exit_pubkey: bytes(1568), packet: by
 
 | Type | Description | Use Case |
 |------|-------------|----------|
-| Public | Poly Labs operated | Free/Premium users |
+| Public | PolyQ Labs operated | Free/Premium users |
 | Partner | Third-party operated (eStream operator) | Bandwidth expansion |
 | Dedicated | Customer-operated | Enterprise/Sovereign |
 
@@ -421,18 +421,18 @@ Platform-specific code is minimal (TUN/TAP setup, OS integration).
 
 ## StreamSight Observability
 
-Per-product isolated telemetry within the `polylabs.vpn.*` lex namespace.
+Per-product isolated telemetry within the `polyqlabs.vpn.*` lex namespace.
 
 ### Telemetry Stream Paths
 
 ```
-lex://estream/apps/polylabs.vpn/telemetry
-lex://estream/apps/polylabs.vpn/telemetry/sli
-lex://estream/apps/polylabs.vpn/metrics/baseline
-lex://estream/apps/polylabs.vpn/metrics/deviations
-lex://estream/apps/polylabs.vpn/incidents
-lex://estream/apps/polylabs.vpn/eslm/exit_selection
-lex://estream/apps/polylabs.vpn/eslm/mimicry_effectiveness
+lex://estream/apps/polyqlabs.vpn/telemetry
+lex://estream/apps/polyqlabs.vpn/telemetry/sli
+lex://estream/apps/polyqlabs.vpn/metrics/baseline
+lex://estream/apps/polyqlabs.vpn/metrics/deviations
+lex://estream/apps/polyqlabs.vpn/incidents
+lex://estream/apps/polyqlabs.vpn/eslm/exit_selection
+lex://estream/apps/polyqlabs.vpn/eslm/mimicry_effectiveness
 ```
 
 No telemetry path references any other Poly product. StreamSight baseline gate learns per-exit latency distributions and flags deviations.
@@ -443,15 +443,15 @@ No telemetry path references any other Poly product. StreamSight baseline gate l
 
 | Widget ID | Category | Description |
 |-----------|----------|-------------|
-| `polyvpn-tunnel-latency` | observability | Scatter route latency gauge (per-exit) |
-| `polyvpn-exit-health` | observability | Exit node load, capacity, and availability |
-| `polyvpn-bandwidth-usage` | observability | Per-stream bandwidth distribution |
-| `polyvpn-deviation-feed` | observability | StreamSight baseline deviation feed |
-| `polyvpn-mimicry-score` | observability | Traffic mimicry effectiveness per stream |
-| `polyvpn-dns-blocks` | observability | DNS block list hit rate |
-| `polyvpn-exit-coverage` | governance | Geographic exit node distribution |
-| `polyvpn-eslm-routing` | governance | AI exit selection decision audit |
-| `polyvpn-sanitization-log` | governance | PII sanitization audit |
+| `qvpn-tunnel-latency` | observability | Scatter route latency gauge (per-exit) |
+| `qvpn-exit-health` | observability | Exit node load, capacity, and availability |
+| `qvpn-bandwidth-usage` | observability | Per-stream bandwidth distribution |
+| `qvpn-deviation-feed` | observability | StreamSight baseline deviation feed |
+| `qvpn-mimicry-score` | observability | Traffic mimicry effectiveness per stream |
+| `qvpn-dns-blocks` | observability | DNS block list hit rate |
+| `qvpn-exit-coverage` | governance | Geographic exit node distribution |
+| `qvpn-eslm-routing` | governance | AI exit selection decision audit |
+| `qvpn-sanitization-log` | governance | PII sanitization audit |
 
 ---
 
@@ -477,7 +477,7 @@ No telemetry path references any other Poly product. StreamSight baseline gate l
 | Pro | $9.99/mo | Unlimited | 10 | 40+ countries | Traffic mimicry, cover traffic, profiles |
 | Enterprise | Custom | Unlimited | Unlimited | Dedicated + public | Custom exits, router support, lex bridge admin |
 
-Tier enforcement via PolyKit `metering_graph` + `subscription_lifecycle` state machine. Each tier unlocks progressively more exits, scatter breadth, and traffic mimicry.
+Tier enforcement via QKit `metering_graph` + `subscription_lifecycle` state machine. Each tier unlocks progressively more exits, scatter breadth, and traffic mimicry.
 
 ---
 
@@ -485,7 +485,7 @@ Tier enforcement via PolyKit `metering_graph` + `subscription_lifecycle` state m
 
 Enterprise customers can opt-in to cross-product visibility via the lex bridge mechanism:
 
-- **Lex bridge**: Bridges `esn/global/org/polylabs/vpn` to the enterprise admin namespace
+- **Lex bridge**: Bridges `esn/global/org/polyqlabs/vpn` to the enterprise admin namespace
 - **Gating**: k-of-n admin witness attestation required to activate
 - **Scope**: Org-level aggregates and RBAC policy only — individual user tunnel data is never cross-linked
 - **Revocable**: Bridge can be torn down at any time by the same k-of-n witness quorum
@@ -496,19 +496,19 @@ Enterprise customers can opt-in to cross-product visibility via the lex bridge m
 ## Directory Structure
 
 ```
-polyvpn/
+qvpn/
 ├── circuits/fl/
-│   ├── polyvpn_encrypt.fl
-│   ├── polyvpn_scatter.fl
-│   ├── polyvpn_mimicry.fl
-│   ├── polyvpn_killswitch.fl
-│   ├── polyvpn_dns.fl
-│   ├── polyvpn_exit_router.fl
-│   ├── polyvpn_health.fl
-│   ├── polyvpn_metering.fl
+│   ├── qvpn_encrypt.fl
+│   ├── qvpn_scatter.fl
+│   ├── qvpn_mimicry.fl
+│   ├── qvpn_killswitch.fl
+│   ├── qvpn_dns.fl
+│   ├── qvpn_exit_router.fl
+│   ├── qvpn_health.fl
+│   ├── qvpn_metering.fl
 │   └── graphs/
-│       ├── polyvpn_exit_graph.fl
-│       └── polyvpn_route_dag.fl
+│       ├── qvpn_exit_graph.fl
+│       └── qvpn_route_dag.fl
 ├── crates/
 │   ├── poly-vpn-core/
 │   ├── poly-exit-node/
@@ -533,7 +533,7 @@ polyvpn/
 - `vpn_exit_mesh` graph + `tunnel_route` DAG
 - FastLang circuits for encryption, scatter, kill switch
 - macOS + Windows desktop client (Tauri)
-- SPARK auth (`poly-vpn-v1`)
+- SPARK auth (`q-vpn-v1`)
 - Single-exit PQ tunnel (scaffold for scatter)
 - Basic DNS protection
 - StreamSight L0 metrics
@@ -569,8 +569,8 @@ All graph and DAG constructs use the full Stratum+Cortex pattern from eStream v0
 
 | Construct | File | Storage | Signing |
 |-----------|------|---------|---------|
-| `vpn_exit_mesh` | `graphs/polyvpn_exit_graph.fl` | `store graph` → CSR (BRAM/DDR/NVMe tiering) | ML-DSA-87 on all mutations |
-| `tunnel_route` | `graphs/polyvpn_route_dag.fl` | `store dag` → Merkle-CSR with `enforce acyclic` | ML-DSA-87 + `attest povc { witness threshold(2,3) }` |
+| `vpn_exit_mesh` | `graphs/qvpn_exit_graph.fl` | `store graph` → CSR (BRAM/DDR/NVMe tiering) | ML-DSA-87 on all mutations |
+| `tunnel_route` | `graphs/qvpn_route_dag.fl` | `store dag` → Merkle-CSR with `enforce acyclic` | ML-DSA-87 + `attest povc { witness threshold(2,3) }` |
 
 Both constructs maintain typed overlays with `delta_curate` for real-time state without mutating base nodes:
 
@@ -588,7 +588,7 @@ data ExitNode : app v1 {
     jurisdiction: string, operator_id: string, ...
 }
     store graph
-    govern lex esn/global/org/polylabs/vpn
+    govern lex esn/global/org/polyqlabs/vpn
     cortex {
         redact [endpoint_address, private_key_hash]
         obfuscate [jurisdiction, operator_id]

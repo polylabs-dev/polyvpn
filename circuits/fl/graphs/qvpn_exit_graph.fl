@@ -1,13 +1,13 @@
-// Poly VPN Exit Graph — Stratum graph storage + Cortex AI governance (v0.12.0)
+// Q VPN Exit Graph — Stratum graph storage + Cortex AI governance (v0.12.0)
 //
 // Models the exit node network as a typed graph with real-time overlays.
 // Cortex redacts endpoint addresses and private key hashes; obfuscates
 // jurisdiction and operator identity. The ai_feed drives optimal
 // multi-exit distribute route selection.
 
-import polykit_identity
-import polykit_metering
-import polykit_governance
+import qkit_identity
+import qkit_metering
+import qkit_governance
 
 type ExitOperatorType = enum {
     PolyLabs,
@@ -37,7 +37,7 @@ data ExitNode : vpn v1 {
     updated_at: u64,
 }
     store graph
-    govern lex global/org/polylabs/vpn/exit
+    govern lex global/org/polyqlabs/vpn/exit
     cortex {
         redact [endpoint_address, private_key_hash]
         obfuscate [jurisdiction, operator_id]
@@ -53,7 +53,7 @@ data PeerNode : vpn v1 {
     bandwidth_mbps: u32,
 }
     store graph
-    govern lex global/org/polylabs/vpn/exit
+    govern lex global/org/polyqlabs/vpn/exit
     cortex {
         obfuscate [peer_id]
         infer on_read
@@ -132,7 +132,7 @@ circuit register_exit(
     operator_type: u8,
     signing_sk: bytes(4896),
 ) -> ExitNode
-    lex global/org/polylabs/vpn/exit
+    lex global/org/polyqlabs/vpn/exit
     @status production
     @precision C
     @attested true
@@ -164,7 +164,7 @@ circuit register_exit(
         function: mldsa_sign
     }
 {
-    let operator_id = polykit_identity::derive_user_id(operator_pk)
+    let operator_id = qkit_identity::derive_user_id(operator_pk)
     let ts = now_ns() / 1000000
     let exit_seed = concat(operator_id, region, csprng(16), ts)
     let exit_id = sha3_256(exit_seed)
@@ -195,7 +195,7 @@ circuit register_exit(
     overlay_set(vpn_exit_mesh, exit_id, jurisdiction, jurisdiction)
     overlay_set(vpn_exit_mesh, exit_id, blacklist_status, 0)
 
-    polykit_metering::record_usage(operator_id, "graph_exit_register", DimensionValues {
+    qkit_metering::record_usage(operator_id, "graph_exit_register", DimensionValues {
         executions: 1, hashes: 3, bandwidth: 0,
         storage: 512, observables: 5, proofs: 1, circuits: 0, mpc_sessions: 0,
     })
@@ -211,7 +211,7 @@ circuit select_exits(
     avoid_jurisdictions: list<string>,
     min_bandwidth_mbps: u32,
 ) -> list<ExitNode>
-    lex global/org/polylabs/vpn/exit
+    lex global/org/polyqlabs/vpn/exit
     @status production
     @precision B
     @observe metrics: [exit_selections, selection_latency_ns, ai_suggestions_used]
@@ -257,7 +257,7 @@ circuit rotate_exits(
     preferred_regions: list<string>,
     avoid_jurisdictions: list<string>,
 ) -> list<ExitNode>
-    lex global/org/polylabs/vpn/exit
+    lex global/org/polyqlabs/vpn/exit
     @status production
     @precision B
     @observe metrics: [exit_rotations]
@@ -294,7 +294,7 @@ circuit update_exit_health(
     load_pct: u8,
     signing_sk: bytes(4896),
 ) -> bool
-    lex global/org/polylabs/vpn/exit
+    lex global/org/polyqlabs/vpn/exit
     @status production
     @precision B
     @observe metrics: [health_updates, degraded_exits]
@@ -334,7 +334,7 @@ circuit blacklist_exit(
     reason: string,
     signing_sk: bytes(4896),
 ) -> bool
-    lex global/org/polylabs/vpn/exit
+    lex global/org/polyqlabs/vpn/exit
     @status production
     @precision C
     @attested true
@@ -364,7 +364,7 @@ circuit attest_exit(
     operator_pk: bytes(2592),
     signing_sk: bytes(4896),
 ) -> string
-    lex global/org/polylabs/vpn/exit
+    lex global/org/polyqlabs/vpn/exit
     @status production
     @precision C
     @attested true
@@ -382,7 +382,7 @@ circuit attest_exit(
     }
 {
     let ts = now_ns() / 1000000
-    let operator_id = polykit_identity::derive_user_id(operator_pk)
+    let operator_id = qkit_identity::derive_user_id(operator_pk)
 
     let attestation_payload = concat(
         exit_id,
@@ -401,7 +401,7 @@ circuit attest_exit(
     }
     graph_update(vpn_exit_mesh, updated)
 
-    polykit_metering::record_usage(operator_id, "graph_exit_attest", DimensionValues {
+    qkit_metering::record_usage(operator_id, "graph_exit_attest", DimensionValues {
         executions: 1, hashes: 2, bandwidth: 0,
         storage: 256, observables: 1, proofs: 1, circuits: 0, mpc_sessions: 0,
     })

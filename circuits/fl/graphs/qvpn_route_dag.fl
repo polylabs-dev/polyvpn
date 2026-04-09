@@ -1,12 +1,12 @@
-// Poly VPN Route DAG — Stratum DAG storage + Cortex AI governance (v0.12.0)
+// Q VPN Route DAG — Stratum DAG storage + Cortex AI governance (v0.12.0)
 //
 // Multi-hop distribute routing modeled as a DAG. Each route is a directed
 // acyclic path through the exit mesh. Acyclicity enforced to prevent
 // routing loops. ML-DSA-87 signed; merkle-CSR backed; PoVC witnessed.
 
-import polykit_identity
-import polykit_metering
-import polykit_governance
+import qkit_identity
+import qkit_metering
+import qkit_governance
 
 type RouteStatus = enum {
     Building,
@@ -27,7 +27,7 @@ data RouteNode : vpn v1 {
     updated_at: u64,
 }
     store dag
-    govern lex global/org/polylabs/vpn/route
+    govern lex global/org/polyqlabs/vpn/route
     cortex {
         redact [hop_key]
         obfuscate [exit_id]
@@ -95,7 +95,7 @@ circuit build_route(
     exit_pubkeys: list<bytes(1568)>,
     signing_sk: bytes(4896),
 ) -> list<RouteNode>
-    lex global/org/polylabs/vpn/route
+    lex global/org/polyqlabs/vpn/route
     @status production
     @precision C
     @attested true
@@ -181,7 +181,7 @@ circuit build_route(
         nodes = append(nodes, node)
     }
 
-    polykit_metering::record_usage(user_id, "dag_route_build", DimensionValues {
+    qkit_metering::record_usage(user_id, "dag_route_build", DimensionValues {
         executions: 1, hashes: len(exit_ids) * 3, bandwidth: 0,
         storage: len(exit_ids) * 256, observables: len(exit_ids) * 3,
         proofs: 1, circuits: 0, mpc_sessions: 0,
@@ -195,7 +195,7 @@ circuit teardown_route(
     route_nodes: list<string>,
     signing_sk: bytes(4896),
 ) -> bool
-    lex global/org/polylabs/vpn/route
+    lex global/org/polyqlabs/vpn/route
     @status production
     @precision C
     @attested true
@@ -231,7 +231,7 @@ circuit reroute_hop(
     new_exit_pubkey: bytes(1568),
     signing_sk: bytes(4896),
 ) -> RouteNode
-    lex global/org/polylabs/vpn/route
+    lex global/org/polyqlabs/vpn/route
     @status production
     @precision C
     @attested true
@@ -277,7 +277,7 @@ circuit reroute_hop(
 circuit prove_route_integrity(
     route_nodes: list<string>,
 ) -> bytes(32)
-    lex global/org/polylabs/vpn/route
+    lex global/org/polyqlabs/vpn/route
     @status production
     @precision C
     @attested true

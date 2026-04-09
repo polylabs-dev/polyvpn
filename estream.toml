@@ -3,7 +3,7 @@ version = "0.22.0"
 min_version = "0.22.0"
 
 [component]
-name = "polyvpn"
+name = "qvpn"
 version = "0.2.0"
 description = "PQ scatter-routed VPN with traffic mimicry and DNS-over-eStream"
 
